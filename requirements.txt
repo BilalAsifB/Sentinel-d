@@ -1,0 +1,10 @@
+# Root-level Python dependencies
+# Shared dependencies across components
+
+# Azure SDK
+azure-identity
+azure-core
+
+# Common utilities
+jsonschema
+python-dotenv
