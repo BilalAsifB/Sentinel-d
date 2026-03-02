@@ -132,6 +132,9 @@ validation_bundle.json        ← I DELIVER THIS TO DEV A
 6. The audit log is append-only. No updates, no deletes, ever.
 7. The `sentinel/wont-fix` label handler must write an ACCEPTED_RISK record to Cosmos DB
    so the pipeline never re-alerts on that CVE+file combination.
+8. Azure subscription spend must not exceed $20 total across the full 14-day build.
+   Use Consumption/serverless tiers, tear down ephemeral resources immediately,
+   avoid long-running compute, and prefer local testing over deployed calls when possible.
 
 ---
 
