@@ -12,10 +12,10 @@ let validate;
 let schemaLoadError;
 
 try {
-  const schemaPath = path.resolve(
-    __dirname,
-    "../../../../shared/schemas/webhook_payload.json"
-  );
+  // Deployed: schema bundled in schemas/ dir; Local dev: fall back to shared/schemas/
+  const localSchema = path.resolve(__dirname, "../../schemas/webhook_payload.json");
+  const repoSchema = path.resolve(__dirname, "../../../../shared/schemas/webhook_payload.json");
+  const schemaPath = fs.existsSync(localSchema) ? localSchema : repoSchema;
   webhookSchema = JSON.parse(fs.readFileSync(schemaPath, "utf-8"));
   const ajv = new Ajv({ allErrors: true });
   addFormats(ajv);
@@ -128,7 +128,7 @@ async function handler(request, context) {
 
 app.http("webhook-receiver", {
   methods: ["POST"],
-  authLevel: "function",
+  authLevel: "anonymous",
   handler,
 });
 

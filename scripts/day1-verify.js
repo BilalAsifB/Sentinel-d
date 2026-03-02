@@ -60,7 +60,15 @@ async function main() {
     body: JSON.stringify(testPayload),
   });
 
-  const responseBody = await response.json();
+  const responseText = await response.text();
+  let responseBody;
+  try {
+    responseBody = JSON.parse(responseText);
+  } catch {
+    console.log(`HTTP ${response.status} (non-JSON): ${responseText.slice(0, 500)}`);
+    console.log("\n❌ FAIL — Response is not valid JSON. Check FUNCTION_KEY or deployment status.");
+    process.exit(1);
+  }
   console.log(`HTTP ${response.status}: ${JSON.stringify(responseBody)}`);
 
   if (response.status !== 202) {
@@ -79,27 +87,41 @@ async function main() {
   const receiver = sbClient.createReceiver(SB_QUEUE);
 
   try {
-    const messages = await receiver.receiveMessages(1, {
-      maxWaitTimeInMs: 15000,
-    });
+    let matched = null;
+    const staleCount = { n: 0 };
 
-    if (messages.length === 0) {
-      console.log("❌ FAIL — No message found in queue after 15 seconds");
+    // Read messages in batches, completing stale ones until we find ours
+    while (!matched) {
+      const messages = await receiver.receiveMessages(10, {
+        maxWaitTimeInMs: 15000,
+      });
+
+      if (messages.length === 0) break;
+
+      for (const msg of messages) {
+        if (msg.body && msg.body.event_id === testPayload.event_id) {
+          matched = msg;
+        } else {
+          staleCount.n++;
+          await receiver.completeMessage(msg);
+        }
+      }
+    }
+
+    if (staleCount.n > 0) {
+      console.log(`(drained ${staleCount.n} stale message(s) from previous runs)`);
+    }
+
+    if (!matched) {
+      console.log("❌ FAIL — No matching message found in queue after 15 seconds");
       process.exit(1);
     }
 
-    const msg = messages[0];
-    const msgBody = msg.body;
+    const msgBody = matched.body;
     console.log(`Message received: event_id=${msgBody.event_id}`);
 
     // Step 3: Assert match
     console.log("\n--- Step 3: Assert payload match ---");
-    if (msgBody.event_id !== testPayload.event_id) {
-      console.log(
-        `❌ FAIL — event_id mismatch: sent=${testPayload.event_id} received=${msgBody.event_id}`
-      );
-      process.exit(1);
-    }
     if (msgBody.cve_id !== testPayload.cve_id) {
       console.log(
         `❌ FAIL — cve_id mismatch: sent=${testPayload.cve_id} received=${msgBody.cve_id}`
@@ -108,7 +130,7 @@ async function main() {
     }
 
     // Complete the message (remove from queue)
-    await receiver.completeMessage(msg);
+    await receiver.completeMessage(matched);
 
     console.log("✅ Payload matches\n");
     console.log("=== ✅ PASS — Day 1 verification complete ===");

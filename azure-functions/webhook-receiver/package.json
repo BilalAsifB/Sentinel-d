@@ -4,6 +4,9 @@
   "description": "Azure Function webhook receiver for GHAS alerts",
   "main": "src/functions/webhook-receiver.js",
   "scripts": {
+    "prebuild": "node -e \"require('fs').cpSync('../../shared/schemas/webhook_payload.json','schemas/webhook_payload.json')\"",
+    "build": "npm run prebuild",
+    "prestart": "npm run prebuild",
     "start": "func start",
     "test": "jest --verbose",
     "test:watch": "jest --watch"
