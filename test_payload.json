@@ -1,0 +1,7 @@
+{
+  "event_id": "mock-alert-001",
+  "cve_id": "CVE-2023-45286",
+  "affected_package": "urllib3",
+  "current_version": "1.26.16",
+  "fix_version_range": ">=1.26.17"
+}
