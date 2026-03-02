@@ -43,6 +43,7 @@ node_modules/
 
 # Copilot setup files
 .copilot/
+.github/copilot-instructions.md
 COPILOT-SETUP.md
 sentinel-d-copilot/
 sentinel-d-copilot-setup.zip
