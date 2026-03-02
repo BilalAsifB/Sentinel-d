@@ -45,3 +45,5 @@ node_modules/
 COPILOT-SETUP.md
 sentinel-d-copilot/
 sentinel-d-copilot-setup.zip
+.env
+*.env
