@@ -145,3 +145,18 @@ validation_bundle.json        ← I DELIVER THIS TO DEV A
 - Tests: Jest for Node.js, pytest for Python, async fixtures for Azure SDK mocking
 - No console.log in production paths — use structured logging to App Insights
 - All Azure resource names use environment variables, never hardcoded strings
+---
+
+## GIT WORKFLOW — MANDATORY
+- NEVER run git commands on my behalf
+- NEVER run: git add, git commit, git push, git merge, git rebase, or any git command
+- When changes are ready to commit, STOP and tell me:
+  1. Which files to stage (exact paths)
+  2. The commit message to use
+  3. Wait for me to confirm the commit is done before continuing
+- Format the instruction clearly, like this:
+
+  📝 Ready to commit. Please run:
+      git add <file1> <file2>
+      git commit -m "type: description"
+  Let me know when done and I'll continue.
