@@ -1,10 +1,21 @@
-# Root-level Python dependencies
-# Shared dependencies across components
-
 # Azure SDK
 azure-identity
 azure-core
 
+# Async Network & API Calls
+aiohttp>=3.9.0
+
+# Environment Configuration
+python-dotenv>=1.0.0
+
 # Common utilities
 jsonschema
-python-dotenv
+
+# Machine Learning & NLP (Dev A Domain)
+spacy>=3.7.0
+transformers>=4.38.0
+torch>=2.2.0
+
+# Testing (Global)
+pytest>=8.0.0
+pytest-asyncio>=0.23.0

@@ -1,0 +1,8 @@
+#enable secret scanning
+echo '{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}' | gh api --method PATCH repos/MujtabaJunaid/Sentinel-d --input -
+
+#Enable Branch Protection
+echo '{"required_status_checks":{"strict":true,"contexts":["CodeQL"]},"enforce_admins":false,"required_pull_request_reviews":{"required_approving_review_count":1,"dismiss_stale_reviews":true},"restrictions":null,"allow_force_pushes":false,"allow_deletions":false}' | gh api --method PUT repos/MujtabaJunaid/Sentinel-d/branches/main/protection --input -
+
+#enable CodeQL 
+echo '{"state":"configured","query_suite":"default"}' | gh api --method PATCH repos/MujtabaJunaid/Sentinel-d/code-scanning/default-setup --input -
