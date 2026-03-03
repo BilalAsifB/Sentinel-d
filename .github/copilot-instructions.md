@@ -168,3 +168,25 @@ validation_bundle.json        ← I DELIVER THIS TO DEV A
 - Dev A's upstream repo is: upstream (MujtabaJunaid/Sentinel-d)
 - PRs go from my fork branch → upstream main
 - I never merge my own PRs — Dev A reviews and merges
+
+---
+
+## LANGUAGE MAP — PER COMPONENT (strict — never deviate)
+
+| Component | Language | Key Libraries |
+|---|---|---|
+| `/azure-functions/` | Node.js | `@azure/functions`, `@azure/service-bus`, `ajv` |
+| `/sre-agent/` | **Python** | `azure-monitor-query`, `azure-identity`, `openai` |
+| `/sandbox-validator/ssim.py` | **Python** | `scikit-image`, `Pillow`, `numpy` |
+| `/sandbox-validator/` (orchestrator) | Node.js | `@octokit/rest`, `@azure/service-bus` |
+| `/safety-governor/` | Node.js | `@octokit/rest`, `@azure/data-tables` |
+| `/historical-db/` | Node.js | `@azure/cosmos`, `@azure/data-tables` |
+| `/shared/retry.js` | Node.js | none |
+| GitHub Actions scripts | Node.js | `@octokit/rest` |
+| Tests for Node.js components | Jest | `jest`, `@jest/globals` |
+| Tests for Python components | pytest | `pytest`, `pytest-asyncio` |
+
+**When writing any new file, check this table first.**
+**If the component is in `/sre-agent/` — it is Python, no exceptions.**
+**Never write a `.js` file inside `/sre-agent/`.**
+**Never write a `.py` file inside `/azure-functions/`.**
