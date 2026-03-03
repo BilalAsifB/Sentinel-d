@@ -160,3 +160,11 @@ validation_bundle.json        ← I DELIVER THIS TO DEV A
       git add <file1> <file2>
       git commit -m "type: description"
   Let me know when done and I'll continue.
+
+## BRANCH WORKFLOW
+- I always work on feature branches, never directly on main
+- Branch naming: feat/day{N}-{component}, fix/{description}, infra/{component}
+- My fork remote is: origin (BilalAsifB/sentinel-d)
+- Dev A's upstream repo is: upstream (MujtabaJunaid/Sentinel-d)
+- PRs go from my fork branch → upstream main
+- I never merge my own PRs — Dev A reviews and merges
