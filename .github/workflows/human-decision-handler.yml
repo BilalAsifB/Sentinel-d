@@ -5,42 +5,169 @@ on:
     types: [labeled]
 
 jobs:
-  handle-decision:
+  handle-fix-now:
     runs-on: ubuntu-latest
-    if: |
-      github.event.label.name == 'sentinel/fix-now' ||
-      github.event.label.name == 'sentinel/defer' ||
-      github.event.label.name == 'sentinel/wont-fix'
-    
+    if: github.event.label.name == 'sentinel/fix-now'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
-      - name: Parse issue body
-        id: parse
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
         run: |
-          alert_id=$(echo "${{ github.event.issue.body }}" | grep "Alert ID:" | cut -d: -f2 | xargs)
-          echo "alert_id=$alert_id" >> $GITHUB_OUTPUT
-      
+          cd safety-governor && npm ci
+          cd ../historical-db && npm ci
+
       - name: Azure Login
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
-      
-      - name: Process fix-now decision
-        if: github.event.label.name == 'sentinel/fix-now'
+
+      - name: Send ACTIVE override to Service Bus
+        env:
+          SERVICE_BUS_NAMESPACE: ${{ secrets.SERVICE_BUS_NAMESPACE }}
+          SERVICE_BUS_QUEUE_NAME: ${{ secrets.SERVICE_BUS_QUEUE_NAME }}
         run: |
-          echo "Processing fix-now for ${{ steps.parse.outputs.alert_id }}"
-          # TODO: Trigger patch generation pipeline
-      
-      - name: Process defer decision
-        if: github.event.label.name == 'sentinel/defer'
+          node -e "
+            const { handleFixNow } = require('./safety-governor/handlers/fix-now');
+            const issueBody = process.env.ISSUE_BODY;
+            handleFixNow(issueBody)
+              .then(r => console.log(JSON.stringify({ message: 'fix-now processed', ...r })))
+              .catch(e => { console.error(e.message); process.exit(1); });
+          "
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+
+      - name: Comment and close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '✅ Sentinel-D pipeline triggered. Full agentic remediation in progress.'
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });
+
+  handle-defer:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'sentinel/defer'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
         run: |
-          echo "Deferring ${{ steps.parse.outputs.alert_id }}"
-          # TODO: Write to deferred backlog (Azure Table Storage)
-      
-      - name: Process wont-fix decision
-        if: github.event.label.name == 'sentinel/wont-fix'
+          cd safety-governor && npm ci
+          cd ../historical-db && npm ci
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Write to deferred backlog
+        id: defer
+        env:
+          TABLE_STORAGE_CONN_STRING: ${{ secrets.TABLE_STORAGE_CONN_STRING }}
+          TABLE_STORAGE_ACCOUNT: ${{ secrets.TABLE_STORAGE_ACCOUNT }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          echo "Marking wont-fix for ${{ steps.parse.outputs.alert_id }}"
-          # TODO: Write ACCEPTED_RISK record to Cosmos DB
+          RESULT=$(node -e "
+            const { handleDefer } = require('./safety-governor/handlers/defer');
+            const issueBody = process.env.ISSUE_BODY;
+            handleDefer(issueBody)
+              .then(r => console.log(JSON.stringify(r)))
+              .catch(e => { console.error(e.message); process.exit(1); });
+          ")
+          DEFER_DATE=$(echo "$RESULT" | jq -r '.defer_until' | cut -dT -f1)
+          echo "defer_date=$DEFER_DATE" >> $GITHUB_OUTPUT
+
+      - name: Comment and close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deferDate = '${{ steps.defer.outputs.defer_date }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `📋 Added to deferred backlog. Will re-evaluate on ${deferDate}.`
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });
+
+  handle-wont-fix:
+    runs-on: ubuntu-latest
+    if: github.event.label.name == 'sentinel/wont-fix'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        run: |
+          cd safety-governor && npm ci
+          cd ../historical-db && npm ci
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Write ACCEPTED_RISK to Cosmos DB
+        env:
+          COSMOS_DB_ENDPOINT: ${{ secrets.COSMOS_DB_ENDPOINT }}
+          COSMOS_DB_DATABASE: ${{ secrets.COSMOS_DB_DATABASE }}
+          COSMOS_DB_CONTAINER: ${{ secrets.COSMOS_DB_CONTAINER }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          node -e "
+            const { handleWontFix } = require('./safety-governor/handlers/wont-fix');
+            const issueBody = process.env.ISSUE_BODY;
+            const decidedBy = '${{ github.event.sender.login }}';
+            const issueUrl = '${{ github.event.issue.html_url }}';
+            handleWontFix(issueBody, decidedBy, issueUrl)
+              .then(r => console.log(JSON.stringify({ message: 'accepted-risk recorded', ...r })))
+              .catch(e => { console.error(e.message); process.exit(1); });
+          "
+
+      - name: Comment and close issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: '🔒 Recorded as accepted risk. Future Sentinel-D scans will not alert on this CVE in this file.'
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed'
+            });

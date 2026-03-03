@@ -1,0 +1,281 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "logicAppName": {
+      "type": "string",
+      "defaultValue": "sentinel-d-auto-escalation",
+      "metadata": {
+        "description": "Name of the Logic App for 72-hour auto-escalation"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the Logic App"
+      }
+    },
+    "githubToken": {
+      "type": "securestring",
+      "metadata": {
+        "description": "GitHub Personal Access Token with issues read/write scope"
+      }
+    },
+    "githubOwner": {
+      "type": "string",
+      "metadata": {
+        "description": "GitHub repository owner"
+      }
+    },
+    "githubRepo": {
+      "type": "string",
+      "metadata": {
+        "description": "GitHub repository name"
+      }
+    },
+    "appInsightsAppId": {
+      "type": "string",
+      "metadata": {
+        "description": "Application Insights Application ID for KQL queries"
+      }
+    },
+    "appInsightsApiKey": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Application Insights API key for query access"
+      }
+    },
+    "serviceBusNamespace": {
+      "type": "string",
+      "metadata": {
+        "description": "Azure Service Bus namespace (without .servicebus.windows.net)"
+      }
+    },
+    "serviceBusQueueName": {
+      "type": "string",
+      "defaultValue": "vulnerability-events",
+      "metadata": {
+        "description": "Service Bus queue name for ACTIVE overrides"
+      }
+    },
+    "securityTeamLeadLogin": {
+      "type": "string",
+      "metadata": {
+        "description": "GitHub login of the security team lead for escalation"
+      }
+    },
+    "escalationHours": {
+      "type": "int",
+      "defaultValue": 72,
+      "metadata": {
+        "description": "Hours before auto-escalation triggers"
+      }
+    }
+  },
+  "variables": {
+    "githubApiBase": "https://api.github.com",
+    "appInsightsApiBase": "[concat('https://api.applicationinsights.io/v1/apps/', parameters('appInsightsAppId'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('logicAppName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "triggers": {
+            "Recurrence": {
+              "type": "Recurrence",
+              "recurrence": {
+                "frequency": "Hour",
+                "interval": 1
+              }
+            }
+          },
+          "actions": {
+            "List_Dormant_Issues": {
+              "type": "Http",
+              "runAfter": {},
+              "inputs": {
+                "method": "GET",
+                "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues?labels=sentinel/dormant&state=open&per_page=100')]",
+                "headers": {
+                  "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                  "Accept": "application/vnd.github.v3+json",
+                  "User-Agent": "Sentinel-D-AutoEscalation"
+                }
+              }
+            },
+            "Filter_Expired_Issues": {
+              "type": "Query",
+              "runAfter": {
+                "List_Dormant_Issues": ["Succeeded"]
+              },
+              "inputs": {
+                "from": "@body('List_Dormant_Issues')",
+                "where": "@less(item()['created_at'], addHours(utcNow(), mul(-1, parameters('escalationHours'))))"
+              }
+            },
+            "For_Each_Expired_Issue": {
+              "type": "Foreach",
+              "runAfter": {
+                "Filter_Expired_Issues": ["Succeeded"]
+              },
+              "foreach": "@body('Filter_Expired_Issues')",
+              "actions": {
+                "Extract_CVE_From_Body": {
+                  "type": "Compose",
+                  "runAfter": {},
+                  "inputs": {
+                    "issue_number": "@items('For_Each_Expired_Issue')['number']",
+                    "issue_body": "@items('For_Each_Expired_Issue')['body']",
+                    "created_at": "@items('For_Each_Expired_Issue')['created_at']"
+                  }
+                },
+                "Parse_Metadata": {
+                  "type": "Compose",
+                  "runAfter": {
+                    "Extract_CVE_From_Body": ["Succeeded"]
+                  },
+                  "inputs": {
+                    "event_id": "@{split(split(outputs('Extract_CVE_From_Body')['issue_body'], 'event_id: ')[1], '\n')[0]}",
+                    "cve_id": "@{split(split(outputs('Extract_CVE_From_Body')['issue_body'], 'cve_id: ')[1], '\n')[0]}",
+                    "affected_package": "@{split(split(outputs('Extract_CVE_From_Body')['issue_body'], 'affected_package: ')[1], '\n')[0]}"
+                  }
+                },
+                "Query_App_Insights_Telemetry": {
+                  "type": "Http",
+                  "runAfter": {
+                    "Parse_Metadata": ["Succeeded"]
+                  },
+                  "inputs": {
+                    "method": "POST",
+                    "uri": "[concat(variables('appInsightsApiBase'), '/query')]",
+                    "headers": {
+                      "x-api-key": "[parameters('appInsightsApiKey')]",
+                      "Content-Type": "application/json"
+                    },
+                    "body": {
+                      "query": "requests | where timestamp > ago(30d) | where name contains '@{outputs('Parse_Metadata')['affected_package']}' | summarize call_count = count()"
+                    }
+                  }
+                },
+                "Check_Call_Count": {
+                  "type": "If",
+                  "runAfter": {
+                    "Query_App_Insights_Telemetry": ["Succeeded"]
+                  },
+                  "expression": {
+                    "and": [
+                      {
+                        "greater": [
+                          "@int(body('Query_App_Insights_Telemetry')['tables'][0]['rows'][0][0])",
+                          0
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Comment_Auto_Promoted": {
+                      "type": "Http",
+                      "runAfter": {},
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues/', outputs('Extract_CVE_From_Body')['issue_number'], '/comments')]",
+                        "headers": {
+                          "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                          "Accept": "application/vnd.github.v3+json",
+                          "User-Agent": "Sentinel-D-AutoEscalation"
+                        },
+                        "body": {
+                          "body": "⚡ Auto-promoted: production calls detected. Sentinel-D pipeline triggered with ACTIVE override."
+                        }
+                      }
+                    },
+                    "Close_Issue_Active": {
+                      "type": "Http",
+                      "runAfter": {
+                        "Comment_Auto_Promoted": ["Succeeded"]
+                      },
+                      "inputs": {
+                        "method": "PATCH",
+                        "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues/', outputs('Extract_CVE_From_Body')['issue_number'])]",
+                        "headers": {
+                          "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                          "Accept": "application/vnd.github.v3+json",
+                          "User-Agent": "Sentinel-D-AutoEscalation"
+                        },
+                        "body": {
+                          "state": "closed"
+                        }
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Reassign_To_Lead": {
+                        "type": "Http",
+                        "runAfter": {},
+                        "inputs": {
+                          "method": "PATCH",
+                          "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues/', outputs('Extract_CVE_From_Body')['issue_number'])]",
+                          "headers": {
+                            "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "Sentinel-D-AutoEscalation"
+                          },
+                          "body": {
+                            "assignees": ["[parameters('securityTeamLeadLogin')]"]
+                          }
+                        }
+                      },
+                      "Comment_Escalation": {
+                        "type": "Http",
+                        "runAfter": {
+                          "Reassign_To_Lead": ["Succeeded"]
+                        },
+                        "inputs": {
+                          "method": "POST",
+                          "uri": "[concat(variables('githubApiBase'), '/repos/', parameters('githubOwner'), '/', parameters('githubRepo'), '/issues/', outputs('Extract_CVE_From_Body')['issue_number'], '/comments')]",
+                          "headers": {
+                            "Authorization": "[concat('Bearer ', parameters('githubToken'))]",
+                            "Accept": "application/vnd.github.v3+json",
+                            "User-Agent": "Sentinel-D-AutoEscalation"
+                          },
+                          "body": {
+                            "body": "[concat('⚠️ 72-hour escalation: no decision made. Escalated to security team lead @', parameters('securityTeamLeadLogin'), '.')]"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {}
+        },
+        "parameters": {}
+      },
+      "tags": {
+        "project": "sentinel-d",
+        "component": "auto-escalation"
+      }
+    }
+  ],
+  "outputs": {
+    "logicAppId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Logic/workflows', parameters('logicAppName'))]"
+    },
+    "logicAppName": {
+      "type": "string",
+      "value": "[parameters('logicAppName')]"
+    }
+  }
+}
