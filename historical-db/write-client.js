@@ -7,9 +7,9 @@ const fs = require("fs");
 
 require("dotenv").config();
 
-const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT;
-const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || "sentinel";
-const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || "historical_records";
+const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
+const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
+const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
 
 // Load and compile schema
 let validate;
