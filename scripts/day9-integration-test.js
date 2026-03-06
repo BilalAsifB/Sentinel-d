@@ -310,7 +310,7 @@ async function checkDeadLetterQueue() {
   const { ServiceBusClient } = require("@azure/service-bus");
   const { DefaultAzureCredential } = require("@azure/identity");
 
-  const namespace = process.env.SERVICE_BUS_NAMESPACE;
+  const namespace = process.env.SERVICE_BUS_NAMESPACE || process.env.SERVICEBUS_NAMESPACE;
   if (!namespace) {
     console.log("\n⚠️  SERVICE_BUS_NAMESPACE not set — skipping DLQ check");
     return -1;
@@ -322,7 +322,7 @@ async function checkDeadLetterQueue() {
     credential
   );
   const queueName =
-    process.env.SERVICE_BUS_QUEUE_NAME || "vulnerability-events";
+    process.env.SERVICE_BUS_QUEUE_NAME || process.env.SERVICEBUS_QUEUE_NAME || "vulnerability-events";
 
   try {
     const receiver = client.createReceiver(queueName, {

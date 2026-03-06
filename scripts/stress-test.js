@@ -92,7 +92,7 @@ async function pollServiceBus(eventIds) {
   const { ServiceBusClient } = require("@azure/service-bus");
   const { DefaultAzureCredential } = require("@azure/identity");
 
-  const namespace = process.env.SERVICE_BUS_NAMESPACE;
+  const namespace = process.env.SERVICE_BUS_NAMESPACE || process.env.SERVICEBUS_NAMESPACE;
   if (!namespace) {
     console.warn("⚠️  SERVICE_BUS_NAMESPACE not set — skipping Service Bus poll");
     return { received: 0, missing: eventIds };
@@ -137,7 +137,7 @@ async function checkDeadLetterQueue() {
   const { ServiceBusClient } = require("@azure/service-bus");
   const { DefaultAzureCredential } = require("@azure/identity");
 
-  const namespace = process.env.SERVICE_BUS_NAMESPACE;
+  const namespace = process.env.SERVICE_BUS_NAMESPACE || process.env.SERVICEBUS_NAMESPACE;
   if (!namespace) {
     console.warn("⚠️  SERVICE_BUS_NAMESPACE not set — skipping DLQ check");
     return { deadLettered: -1 };
