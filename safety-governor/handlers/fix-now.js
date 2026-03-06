@@ -20,9 +20,12 @@ async function handleFixNow(issueBody) {
     throw new Error("SERVICE_BUS_NAMESPACE environment variable is required");
   }
 
+  const namespace = SB_NAMESPACE.includes('.servicebus.windows.net')
+    ? SB_NAMESPACE
+    : `${SB_NAMESPACE}.servicebus.windows.net`;
   const credential = new DefaultAzureCredential();
   const client = new ServiceBusClient(
-    `${SB_NAMESPACE}.servicebus.windows.net`,
+    namespace,
     credential
   );
   const sender = client.createSender(SB_QUEUE);

@@ -145,6 +145,8 @@ describe("createDecisionIssue", () => {
     delete process.env.GITHUB_TOKEN;
     delete process.env.GITHUB_OWNER;
     delete process.env.GITHUB_REPO;
+    delete process.env.GITHUB_REPO_OWNER;
+    delete process.env.GITHUB_REPO_NAME;
     const { createDecisionIssue } = require("../create-decision-issue");
     await expect(
       createDecisionIssue(sampleTelemetry, { lookup_status: "NO_MATCH" }, sampleWebhookPayload)
@@ -155,6 +157,8 @@ describe("createDecisionIssue", () => {
     process.env.GITHUB_TOKEN = "test-token";
     delete process.env.GITHUB_OWNER;
     delete process.env.GITHUB_REPO;
+    delete process.env.GITHUB_REPO_OWNER;
+    delete process.env.GITHUB_REPO_NAME;
     const { createDecisionIssue } = require("../create-decision-issue");
     await expect(
       createDecisionIssue(sampleTelemetry, { lookup_status: "NO_MATCH" }, sampleWebhookPayload)

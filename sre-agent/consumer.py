@@ -21,12 +21,12 @@ from telemetry_query import query_telemetry
 from classifier import classify
 from router import route_classification
 
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 logger = logging.getLogger(__name__)
 
-SB_NAMESPACE: str = os.environ.get("SERVICE_BUS_NAMESPACE", "")
-SB_QUEUE: str = os.environ.get("SERVICE_BUS_QUEUE_NAME", "vulnerability-events")
+SB_NAMESPACE: str = os.environ.get("SERVICE_BUS_NAMESPACE", "") or os.environ.get("SERVICEBUS_NAMESPACE", "")
+SB_QUEUE: str = os.environ.get("SERVICE_BUS_QUEUE_NAME", "") or os.environ.get("SERVICEBUS_QUEUE_NAME", "vulnerability-events")
 WORKSPACE_ID: str = os.environ.get("APP_INSIGHTS_WORKSPACE_ID", "")
 
 # Lock renewal interval: 4 minutes (lock duration is 5 min)
@@ -101,10 +101,9 @@ async def start_consumer() -> None:
                         _renew_lock(receiver, message)
                     )
                     try:
-                        event = message.body
-                        if isinstance(event, bytes):
-                            import json
-                            event = json.loads(event)
+                        import json
+                        raw = b"".join(message.body)
+                        event = json.loads(raw)
 
                         classification = await process_event(event)
                         logger.info(
