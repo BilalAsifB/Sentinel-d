@@ -21,8 +21,8 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-SB_NAMESPACE: str = os.environ.get("SERVICE_BUS_NAMESPACE", "")
-NLP_TOPIC: str = os.environ.get("NLP_PIPELINE_TOPIC", "nlp-pipeline-input")
+SB_NAMESPACE: str = os.environ.get("SERVICE_BUS_NAMESPACE", "") or os.environ.get("SERVICEBUS_NAMESPACE", "")
+NLP_TOPIC: str = os.environ.get("NLP_PIPELINE_TOPIC", "") or os.environ.get("SERVICEBUS_TOPIC_NAME", "nlp-pipeline-input")
 
 # Path to the Safety Governor create-decision-issue.js script
 _SAFETY_GOVERNOR_DIR = os.path.join(
