@@ -85,7 +85,7 @@
 
 - **CVE-2021-44228 (Log4Shell):** ✅ Schema validated, strategy: API_MIGRATION, outcome: SUCCESS
 - **CVE-2020-9547 (Jackson):** ✅ Schema validated, strategy: VERSION_PIN, outcome: SUCCESS
-- **Live Cosmos DB write:** ❌ Blocked — `COSMOS_DB_ENDPOINT` env var not set in write-client (`.env` uses `COSMOS_ENDPOINT`). Fix: align env var names or add `COSMOS_DB_ENDPOINT` to `.env`.
+- **Live Cosmos DB write:** ✅ Fixed — both `write-client.js` and `cosmos-client.js` now accept `COSMOS_ENDPOINT` or `COSMOS_DB_ENDPOINT` with fallback logic. Explicit error thrown if neither is set. Env vars read at call time (not module load) for test robustness.
 
 ---
 
@@ -104,7 +104,7 @@
 
 ## Blockers for Live Test
 
-1. **Cosmos DB env var mismatch:** `write-client.js` reads `COSMOS_DB_ENDPOINT`, but `.env` defines `COSMOS_ENDPOINT`. Need to add `COSMOS_DB_ENDPOINT` alias or update write-client.
+1. ~~**Cosmos DB env var mismatch:**~~ ✅ Fixed Day 10 — fallback logic + explicit error guard added.
 2. **No WEBHOOK_URL configured:** Azure Function webhook not deployed or URL not in `.env`.
 3. **No SERVICE_BUS_NAMESPACE configured:** Service Bus not set up for live routing verification.
 4. **Dev A coordination required:** Joint test needs both engineers monitoring simultaneously.

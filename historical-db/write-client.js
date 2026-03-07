@@ -44,6 +44,9 @@ async function writeResolutionRecord(record) {
   }
 
   const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
+  if (!COSMOS_ENDPOINT) {
+    throw new Error("Missing COSMOS_DB_ENDPOINT or COSMOS_ENDPOINT environment variable");
+  }
   const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
   const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
 
