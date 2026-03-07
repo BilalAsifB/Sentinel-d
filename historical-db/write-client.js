@@ -7,10 +7,6 @@ const fs = require("fs");
 
 require("dotenv").config();
 
-const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
-const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
-const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
-
 // Load and compile schema
 let validate;
 let schemaLoadError;
@@ -46,6 +42,10 @@ async function writeResolutionRecord(record) {
     );
     throw new Error(`Schema validation failed: ${errors.join("; ")}`);
   }
+
+  const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
+  const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
+  const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
 
   const credential = new DefaultAzureCredential();
   const client = new CosmosClient({ endpoint: COSMOS_ENDPOINT, aadCredentials: credential });

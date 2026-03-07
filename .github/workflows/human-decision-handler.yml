@@ -34,17 +34,9 @@ jobs:
           SERVICE_BUS_QUEUE_NAME: ${{ secrets.SERVICE_BUS_QUEUE_NAME }}
         with:
           script: |
-            const fs = require('fs');
-            fs.writeFileSync('/tmp/issue-body.txt', context.payload.issue.body);
-            const { execSync } = require('child_process');
-            execSync(`node -e "
-              const fs = require('fs');
-              const { handleFixNow } = require('./safety-governor/handlers/fix-now');
-              const issueBody = fs.readFileSync('/tmp/issue-body.txt', 'utf8');
-              handleFixNow(issueBody)
-                .then(r => console.log(JSON.stringify({ message: 'fix-now processed', ...r })))
-                .catch(e => { console.error(e.message); process.exit(1); });
-            "`, { stdio: 'inherit', env: process.env });
+            const { handleFixNow } = require('./safety-governor/handlers/fix-now');
+            const result = await handleFixNow(context.payload.issue.body);
+            console.log(JSON.stringify({ message: 'fix-now processed', ...result }));
 
       - name: Comment and close issue
         uses: actions/github-script@v7
@@ -93,20 +85,11 @@ jobs:
           TABLE_STORAGE_ACCOUNT: ${{ secrets.TABLE_STORAGE_ACCOUNT }}
         with:
           script: |
-            const fs = require('fs');
-            fs.writeFileSync('/tmp/issue-body.txt', context.payload.issue.body);
-            const { execSync } = require('child_process');
-            const result = execSync(`node -e "
-              const fs = require('fs');
-              const { handleDefer } = require('./safety-governor/handlers/defer');
-              const issueBody = fs.readFileSync('/tmp/issue-body.txt', 'utf8');
-              handleDefer(issueBody)
-                .then(r => console.log(JSON.stringify(r)))
-                .catch(e => { console.error(e.message); process.exit(1); });
-            "`, { env: process.env }).toString().trim();
-            const parsed = JSON.parse(result);
-            const deferDate = parsed.defer_until.split('T')[0];
+            const { handleDefer } = require('./safety-governor/handlers/defer');
+            const result = await handleDefer(context.payload.issue.body);
+            const deferDate = result.defer_until.split('T')[0];
             core.setOutput('defer_date', deferDate);
+            console.log(JSON.stringify(result));
 
       - name: Comment and close issue
         uses: actions/github-script@v7
@@ -156,19 +139,11 @@ jobs:
           COSMOS_DB_CONTAINER: ${{ secrets.COSMOS_DB_CONTAINER }}
         with:
           script: |
-            const fs = require('fs');
-            fs.writeFileSync('/tmp/issue-body.txt', context.payload.issue.body);
+            const { handleWontFix } = require('./safety-governor/handlers/wont-fix');
             const decidedBy = context.payload.sender.login;
             const issueUrl = context.payload.issue.html_url;
-            const { execSync } = require('child_process');
-            execSync(`node -e "
-              const fs = require('fs');
-              const { handleWontFix } = require('./safety-governor/handlers/wont-fix');
-              const issueBody = fs.readFileSync('/tmp/issue-body.txt', 'utf8');
-              handleWontFix(issueBody, '${decidedBy}', '${issueUrl}')
-                .then(r => console.log(JSON.stringify({ message: 'accepted-risk recorded', ...r })))
-                .catch(e => { console.error(e.message); process.exit(1); });
-            "`, { stdio: 'inherit', env: process.env });
+            const result = await handleWontFix(context.payload.issue.body, decidedBy, issueUrl);
+            console.log(JSON.stringify({ message: 'accepted-risk recorded', ...result }));
 
       - name: Comment and close issue
         uses: actions/github-script@v7
