@@ -7,6 +7,7 @@
  * Dev A owns computeScore() — for now we accept it as a parameter.
  */
 
+const telemetry = require("../shared/telemetry");
 const path = require("path");
 const router = require("./router");
 const prGenerator = require("./pr-generator");
@@ -93,19 +94,17 @@ async function govern({
   const { tier, action, overrideReason } = router.route(
     compositeScore,
     validationBundle,
-    candidatePatch
+    candidatePatch,
+    structuredContext
   );
 
-  console.log(
-    JSON.stringify({
-      message: "Safety Governor routing decision",
-      eventId: event.event_id,
-      tier,
-      action,
-      compositeScore,
-      overrideReason,
-    })
-  );
+  telemetry.trackEvent("safety-governor-routing-decision", {
+    eventId: event.event_id,
+    tier,
+    action,
+    compositeScore: String(compositeScore),
+    overrideReason: overrideReason || "none",
+  });
 
   let prUrl = null;
   let issueUrl = null;
