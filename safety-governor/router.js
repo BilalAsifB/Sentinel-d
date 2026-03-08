@@ -67,6 +67,14 @@ function route(compositeScore, validationBundle, candidatePatch) {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Patch apply failure: git apply failed in sandbox";
+  } else if (validationBundle.tests_failed === -1) {
+    tier = "BLOCKED";
+    action = "ARCHIVE";
+    overrideReason = "Infrastructure failure: sandbox returned tests_failed=-1";
+  } else if (validationBundle.tests_failed === -2) {
+    tier = "BLOCKED";
+    action = "ARCHIVE";
+    overrideReason = "Patch apply failure: sandbox returned tests_failed=-2";
   }
 
   // LOW override (only if not already BLOCKED)

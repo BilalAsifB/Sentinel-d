@@ -165,13 +165,19 @@ function runSSIM(eventId) {
     }
 
     const ssimScript = path.join(__dirname, "ssim.py");
+    const ssimArgs = JSON.stringify({
+      baseline: baselinePath,
+      current: currentPath,
+      event_id: `${eventId}-${route.slug}`,
+    });
     const cmd = `python3 -c "
 import json, sys
-sys.path.insert(0, '${__dirname}')
+sys.path.insert(0, '${__dirname.replace(/'/g, "\\'")}')
 from ssim import compute_ssim
-result = compute_ssim('${baselinePath}', '${currentPath}', '${eventId}-${route.slug}')
+args = json.loads(sys.argv[1])
+result = compute_ssim(args['baseline'], args['current'], args['event_id'])
 print(json.dumps(result))
-"`;
+" '${ssimArgs.replace(/'/g, "\\'")}'`;
 
     try {
       const output = execSync(cmd, { encoding: "utf8", timeout: 60_000 });
@@ -212,6 +218,7 @@ async function validate(candidatePatch) {
   // CANNOT_PATCH: short-circuit with failure sentinel
   if (status === "CANNOT_PATCH") {
     return buildBundle(event_id, {
+      validation_status: "CANNOT_PATCH",
       tests_passed: 0,
       tests_failed: -2,
       coverage_before: 0,
@@ -240,6 +247,7 @@ async function validate(candidatePatch) {
       // Workflow timeout
       console.error(JSON.stringify({ level: "error", message: "Workflow timed out", event_id }));
       return buildBundle(event_id, {
+        validation_status: "TIMEOUT",
         tests_passed: 0,
         tests_failed: -1,
         coverage_before: 0,
@@ -258,6 +266,7 @@ async function validate(candidatePatch) {
   } catch (err) {
     console.error(JSON.stringify({ level: "error", message: "Sandbox execution failed", event_id, error: err.message }));
     return buildBundle(event_id, {
+      validation_status: "INFRASTRUCTURE_FAILURE",
       tests_passed: 0,
       tests_failed: -2,
       coverage_before: 0,
@@ -281,6 +290,7 @@ async function validate(candidatePatch) {
   const coverageAfter = testResults?.coverage_after ?? 0;
 
   return buildBundle(event_id, {
+    validation_status: "COMPLETED",
     tests_passed: testsPassed,
     tests_failed: testsFailed,
     coverage_before: coverageBefore,

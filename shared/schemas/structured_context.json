@@ -44,7 +44,8 @@
       "items": { "type": "string" }
     },
     "historical_match_status": {
-      "type": "string"
+      "type": "string",
+      "enum": ["EXACT_MATCH", "SEMANTIC_MATCH", "NO_MATCH"]
     },
     "historical_patch_available": {
       "type": "boolean"

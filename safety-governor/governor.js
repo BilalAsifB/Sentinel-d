@@ -43,14 +43,14 @@ function tierToOutcome(tier) {
  * @param {string|null} failureReason
  * @returns {object} historical_db_record.json conformant object
  */
-function buildHistoricalRecord(event, candidatePatch, tier, failureReason) {
+function buildHistoricalRecord(event, candidatePatch, tier, failureReason, structuredContext) {
   return {
     id: event.event_id,
     cve_id: event.cve_id,
     repo: event.repo,
     affected_package: event.affected_package,
     affected_version_range: event.current_version,
-    language: "java", // Inferred from context; Dev A may override
+    language: event.language || (structuredContext && structuredContext.language) || "unknown",
     framework: "unknown",
     fix_strategy_used: candidatePatch.source === "RAG_REPLAY" ? "RAG_REPLAY" : "LLM_GENERATED",
     patch_outcome: tierToOutcome(tier),
@@ -165,7 +165,8 @@ async function govern({
     event,
     candidatePatch,
     tier,
-    failureReason
+    failureReason,
+    structuredContext
   );
   await historicalDb.writeResolutionRecord(historicalRecord);
 

@@ -67,7 +67,7 @@ async function getRecord(cveId) {
 
 /**
  * Delete a record by id and partition key (cve_id).
- * Used only in test cleanup — not part of the production path.
+ * @internal Test cleanup only — not part of the production path.
  * @param {string} id - Document id
  * @param {string} cveId - Partition key value
  * @returns {Promise<void>}
