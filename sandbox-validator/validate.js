@@ -23,6 +23,7 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const telemetry = require("../shared/telemetry");
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
@@ -160,7 +161,7 @@ function runSSIM(eventId) {
     const currentPath = `/tmp/current-${route.slug}-${eventId}.png`;
 
     if (!fs.existsSync(baselinePath) || !fs.existsSync(currentPath)) {
-      console.log(JSON.stringify({ level: "info", message: `Skipping SSIM for ${route.slug}: missing screenshot(s)` }));
+      telemetry.logInfo(`Skipping SSIM for ${route.slug}: missing screenshot(s)`);
       continue;
     }
 
@@ -236,16 +237,16 @@ async function validate(candidatePatch) {
 
   try {
     // Step 1: Trigger sandbox workflow
-    console.log(JSON.stringify({ level: "info", message: "Triggering sandbox workflow", event_id }));
+    telemetry.logInfo("Triggering sandbox workflow", { event_id });
     await triggerWorkflow(event_id, diff);
 
     // Step 2: Poll for completion
-    console.log(JSON.stringify({ level: "info", message: "Polling for workflow completion (max 15 min)", event_id }));
+    telemetry.logInfo("Polling for workflow completion (max 15 min)", { event_id });
     workflowRun = await pollWorkflowCompletion(event_id);
 
     if (!workflowRun) {
       // Workflow timeout
-      console.error(JSON.stringify({ level: "error", message: "Workflow timed out", event_id }));
+      telemetry.logError("Workflow timed out", { event_id });
       return buildBundle(event_id, {
         validation_status: "TIMEOUT",
         tests_passed: 0,
@@ -261,10 +262,10 @@ async function validate(candidatePatch) {
     }
 
     // Step 3: Download test results
-    console.log(JSON.stringify({ level: "info", message: "Workflow completed", event_id, conclusion: workflowRun.conclusion }));
+    telemetry.logInfo("Workflow completed", { event_id, conclusion: workflowRun.conclusion });
     testResults = await downloadTestResults(workflowRun.id);
   } catch (err) {
-    console.error(JSON.stringify({ level: "error", message: "Sandbox execution failed", event_id, error: err.message }));
+    telemetry.logError("Sandbox execution failed", { event_id, error: err.message });
     return buildBundle(event_id, {
       validation_status: "INFRASTRUCTURE_FAILURE",
       tests_passed: 0,
@@ -280,7 +281,7 @@ async function validate(candidatePatch) {
   }
 
   // Step 4: Run SSIM comparison
-  console.log(JSON.stringify({ level: "info", message: "Running SSIM visual regression analysis", event_id }));
+  telemetry.logInfo("Running SSIM visual regression analysis", { event_id });
   const ssimResults = runSSIM(event_id);
 
   // Step 5: Assemble validation bundle

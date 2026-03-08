@@ -1,12 +1,13 @@
 const { TableClient } = require("@azure/data-tables");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { withRetry } = require("../shared/retry");
+const telemetry = require("../shared/telemetry");
 
 require("dotenv").config();
 
 const logger = {
-  info: (data) => process.env.NODE_ENV !== "test" && console.log(JSON.stringify({ level: "info", ...data })),
-  error: (data) => console.error(JSON.stringify({ level: "error", ...data })),
+  info: (data) => process.env.NODE_ENV !== "test" && telemetry.logInfo(data.message || "info", data),
+  error: (data) => telemetry.logError(data.message || "error", data),
 };
 
 const TABLE_NAME = "deferredbacklog";
