@@ -3,10 +3,15 @@
 import asyncio
 import logging
 import json
+import os
+import sys
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import aiohttp
 import hashlib
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.retry import with_retry
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -30,7 +35,7 @@ class NVDFetcher:
 
     async def fetch(self, cve_id: str) -> Dict[str, Any]:
         """
-        Fetch CVE data from NVD API with caching.
+        Fetch CVE data from NVD API with caching and retry.
 
         Args:
             cve_id: CVE identifier (e.g., CVE-2024-1234).
@@ -40,14 +45,13 @@ class NVDFetcher:
         """
         cache_key = hashlib.md5(cve_id.encode()).hexdigest()
 
-        # Check cache
         if cache_key in self.cache:
             cached_data, timestamp = self.cache[cache_key]
             if datetime.utcnow() - timestamp < self.CACHE_DURATION:
                 logger.debug(f"Cache hit for CVE {cve_id}")
                 return cached_data
 
-        try:
+        async def _do_fetch() -> Dict[str, Any]:
             async with aiohttp.ClientSession() as session:
                 params = {"cveId": cve_id}
                 if self.api_key:
@@ -58,23 +62,22 @@ class NVDFetcher:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # Cache the response
-                        self.cache[cache_key] = (data, datetime.utcnow())
-                        logger.info(f"Successfully fetched NVD data for {cve_id}")
-                        return data
-                    else:
+                    if response.status == 429:
+                        error = Exception(f"NVD rate limit for {cve_id}")
+                        error.status_code = 429
+                        raise error
+                    if response.status != 200:
                         logger.warning(f"NVD API error {response.status} for {cve_id}")
                         return {}
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout fetching NVD data for {cve_id}")
-            return {}
-        except aiohttp.ClientError as e:
-            logger.error(f"Client error fetching NVD data for {cve_id}: {e}")
-            return {}
+                    data = await response.json()
+                    self.cache[cache_key] = (data, datetime.utcnow())
+                    logger.info(f"Successfully fetched NVD data for {cve_id}")
+                    return data
+
+        try:
+            return await with_retry(_do_fetch, label="nvd-api", max_attempts=3)
         except Exception as e:
-            logger.error(f"Unexpected error fetching NVD data for {cve_id}: {e}")
+            logger.error(f"NVD fetch failed after retries for {cve_id}: {e}")
             return {}
 
 
@@ -90,7 +93,7 @@ class StackOverflowFetcher:
 
     async def fetch(self, affected_package: str, limit: int = 5) -> Dict[str, Any]:
         """
-        Fetch Stack Overflow answers for a package with filtering by score.
+        Fetch Stack Overflow answers for a package with filtering by score and retry.
 
         Args:
             affected_package: Package name to search for.
@@ -99,7 +102,7 @@ class StackOverflowFetcher:
         Returns:
             Dictionary containing Stack Overflow search results or empty dict on failure.
         """
-        try:
+        async def _do_fetch() -> Dict[str, Any]:
             async with aiohttp.ClientSession() as session:
                 params = {
                     "q": affected_package,
@@ -114,19 +117,19 @@ class StackOverflowFetcher:
                     params=params,
                     timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        logger.info(f"Successfully fetched Stack Overflow data for {affected_package}")
-                        return data
-                    else:
+                    if response.status == 429:
+                        error = Exception(f"Stack Overflow rate limit for {affected_package}")
+                        error.status_code = 429
+                        raise error
+                    if response.status != 200:
                         logger.warning(f"Stack Exchange API error {response.status} for {affected_package}")
                         return {}
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout fetching Stack Overflow data for {affected_package}")
-            return {}
-        except aiohttp.ClientError as e:
-            logger.error(f"Client error fetching Stack Overflow data for {affected_package}: {e}")
-            return {}
+                    data = await response.json()
+                    logger.info(f"Successfully fetched Stack Overflow data for {affected_package}")
+                    return data
+
+        try:
+            return await with_retry(_do_fetch, label="stackoverflow-api", max_attempts=3)
         except Exception as e:
-            logger.error(f"Unexpected error fetching Stack Overflow data for {affected_package}: {e}")
+            logger.error(f"Stack Overflow fetch failed after retries for {affected_package}: {e}")
             return {}

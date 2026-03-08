@@ -21,21 +21,30 @@ class EntityExtractor:
 
     ENTITY_LABELS = ["VERSION_RANGE", "API_SYMBOL", "BREAKING_CHANGE", "FIX_ACTION"]
 
-    def __init__(self, spacy_nlp: spacy.Language):
+    def __init__(self, spacy_nlp: spacy.Language | None = None, model_path: str = ""):
         """
         Initialize EntityExtractor with a loaded spaCy model.
 
         Args:
             spacy_nlp: Loaded spaCy Language model with NER component.
-
-        Raises:
-            ValueError: If model doesn't have an NER component.
+                       If None, loads en_core_web_sm automatically.
+            model_path: Path to fine-tuned model (used only if spacy_nlp is None).
         """
-        if "ner" not in spacy_nlp.pipe_names:
-            raise ValueError(f"spaCy model missing NER component. Has: {spacy_nlp.pipe_names}")
+        if spacy_nlp is None:
+            import os
+            if model_path and os.path.exists(model_path):
+                try:
+                    spacy_nlp = spacy.load(model_path)
+                    logger.info("Loaded fine-tuned spaCy model from %s", model_path)
+                except Exception:
+                    spacy_nlp = spacy.load("en_core_web_sm")
+                    logger.info("Fallback to en_core_web_sm base model")
+            else:
+                spacy_nlp = spacy.load("en_core_web_sm")
+                logger.info("Loaded en_core_web_sm base model")
         
         self.nlp = spacy_nlp
-        logger.info(f"EntityExtractor initialized with spaCy model")
+        logger.info("EntityExtractor initialized (pipeline: %s)", spacy_nlp.pipe_names)
 
     def extract(self, text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
         """
@@ -128,18 +137,47 @@ class IntentClassifier:
         3: "FULL_REFACTOR"
     }
 
-    def __init__(self, distilbert_model: DistilBertForSequenceClassification, 
-                 distilbert_tokenizer: DistilBertTokenizer):
+    def __init__(
+        self,
+        distilbert_model: DistilBertForSequenceClassification | None = None,
+        distilbert_tokenizer: DistilBertTokenizer | None = None,
+        model_path: str = "",
+    ):
         """
         Initialize IntentClassifier with loaded DistilBERT model and tokenizer.
 
         Args:
             distilbert_model: Loaded DistilBertForSequenceClassification model.
-            distilbert_tokenizer: Associated tokenizer.
+                              If None, loads automatically.
+            distilbert_tokenizer: Associated tokenizer. If None, loads automatically.
+            model_path: Path to fine-tuned model (used only if model is None).
         """
+        if distilbert_model is None or distilbert_tokenizer is None:
+            import os
+            if model_path and os.path.isdir(model_path):
+                try:
+                    distilbert_tokenizer = DistilBertTokenizer.from_pretrained(model_path)
+                    distilbert_model = DistilBertForSequenceClassification.from_pretrained(
+                        model_path, num_labels=4
+                    )
+                    logger.info("Loaded fine-tuned DistilBERT from %s", model_path)
+                except Exception:
+                    distilbert_tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+                    distilbert_model = DistilBertForSequenceClassification.from_pretrained(
+                        "distilbert-base-uncased", num_labels=4
+                    )
+                    logger.info("Fallback to base DistilBERT with random head")
+            else:
+                distilbert_tokenizer = DistilBertTokenizer.from_pretrained("distilbert-base-uncased")
+                distilbert_model = DistilBertForSequenceClassification.from_pretrained(
+                    "distilbert-base-uncased", num_labels=4
+                )
+                logger.info("Loaded base DistilBERT with random classifier head")
+        
         self.model = distilbert_model
         self.tokenizer = distilbert_tokenizer
-        logger.info(f"IntentClassifier initialized with DistilBERT model")
+        self.model.eval()
+        logger.info("IntentClassifier initialized")
 
     def classify(
         self, text: str

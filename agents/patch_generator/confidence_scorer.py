@@ -183,12 +183,14 @@ class ConfidenceScorer:
         score: float,
         structured_context: dict[str, Any],
     ) -> float:
-        """Apply +0.05 bonus if historical_match_status == 'EXACT_MATCH'."""
+        """Apply +0.05 bonus if source is RAG_REPLAY."""
+        # Bonus applies when the patch came from RAG replay path
+        source = structured_context.get("source", "")
         historical_match = structured_context.get("historical_match_status", "")
         
-        if historical_match == "EXACT_MATCH":
+        if source == "RAG_REPLAY" or historical_match == "EXACT_MATCH":
             bonus_score = score + 0.05
-            logger.info("Applied +0.05 bonus for EXACT_MATCH")
+            logger.info("Applied +0.05 RAG replay bonus")
             return bonus_score
         
         return score

@@ -5,8 +5,8 @@ import logging
 import os
 from typing import Dict, Any, List, Optional
 
-from azure.cosmos.aio import CosmosClient, ContainerProxy
 from azure.core.credentials import AzureKeyCredential
+from azure.cosmos.aio import CosmosClient, ContainerProxy
 from azure.search.documents.aio import SearchClient
 
 logger = logging.getLogger(__name__)
@@ -20,35 +20,40 @@ class AsyncCosmosClientWrapper:
         """
         Initialize Cosmos DB client wrapper from environment variables.
         
-        Reads: COSMOS_DB_ENDPOINT, COSMOS_DB_READ_KEY, COSMOS_DB_NAME, COSMOS_CONTAINER_NAME
+        Reads: COSMOS_DB_ENDPOINT, COSMOS_DB_NAME, COSMOS_CONTAINER_NAME
+        Uses DefaultAzureCredential for authentication.
         """
         self.endpoint = os.getenv("COSMOS_DB_ENDPOINT")
-        self.read_key = os.getenv("COSMOS_DB_READ_KEY")
         self.database_name = os.getenv("COSMOS_DB_NAME", "sentinel")
         self.container_name = os.getenv("COSMOS_CONTAINER_NAME", "cve_patches")
         
-        if not self.endpoint or not self.read_key:
+        if not self.endpoint:
             raise ValueError(
-                "COSMOS_DB_ENDPOINT and COSMOS_DB_READ_KEY environment variables required"
+                "COSMOS_DB_ENDPOINT environment variable required"
             )
         
         self.client = None
         self.container: ContainerProxy = None
+        self._credential = None
         logger.info(
             f"Initialized AsyncCosmosClientWrapper for {self.database_name}/{self.container_name}"
         )
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "AsyncCosmosClientWrapper":
         """Async context manager entry."""
-        self.client = CosmosClient(self.endpoint, credential=AzureKeyCredential(self.read_key))
+        from azure.identity.aio import DefaultAzureCredential as AsyncDefaultAzureCredential
+        self._credential = AsyncDefaultAzureCredential()
+        self.client = CosmosClient(self.endpoint, credential=self._credential)
         database = self.client.get_database_client(self.database_name)
         self.container = database.get_container_client(self.container_name)
         return self
 
-    async def __aexit__(self, *args):
+    async def __aexit__(self, *args: Any) -> None:
         """Async context manager exit."""
         if self.client:
             await self.client.close()
+        if self._credential:
+            await self._credential.close()
 
     async def get_exact_match(self, cve_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -98,6 +103,9 @@ class AsyncAISearchWrapper:
     def __init__(self):
         """
         Initialize Azure AI Search client wrapper from environment variables.
+        
+        DEPRECATED: Azure AI Search removed for cost optimization in v3.0.
+        Use nlp-pipeline/historical_db/read_client.py (in-memory cosine similarity) instead.
         
         Reads: AI_SEARCH_ENDPOINT, AI_SEARCH_API_KEY, AI_SEARCH_INDEX_NAME
         """

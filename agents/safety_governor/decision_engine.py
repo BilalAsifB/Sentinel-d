@@ -138,8 +138,9 @@ class DecisionEngine:
         if missing:
             raise ValueError(f"Missing required fields in validation_bundle: {missing}")
         
-        if data["tests_passed"] < 0 or data["tests_failed"] < 0:
-            raise ValueError("Test counts cannot be negative")
+        if data["tests_passed"] < 0:
+            raise ValueError("tests_passed cannot be negative")
+        # tests_failed allows -1 (infrastructure failure) and -2 (patch apply failure)
         
         if not 0 <= data["coverage_before"] <= 100 or not 0 <= data["coverage_after"] <= 100:
             raise ValueError("Coverage percentages must be between 0 and 100")
@@ -199,47 +200,88 @@ class DecisionEngine:
         validation: ValidationBundle,
         composite_score: float,
     ) -> SafetyDecision:
-        """Determine routing tier based on safety criteria."""
+        """Determine routing tier based on safety criteria and override conditions.
         
-        # BLOCKED: Score too low or test failures detected
-        if composite_score < self.SCORE_LOW_THRESHOLD or validation.tests_failed > 0:
-            reason = f"Score {composite_score:.3f} below threshold"
-            if validation.tests_failed > 0:
-                reason = f"{validation.tests_failed} test failure(s)"
-            
+        Override conditions (can only downgrade, never upgrade):
+            BLOCKED: CANNOT_PATCH, tests_failed == -1 or -2
+            LOW: touches_auth_crypto == true  
+            MEDIUM: visual_regression == true, fix_strategy == FULL_REFACTOR
+        """
+        
+        # BLOCKED overrides (highest priority)
+        if validation.tests_failed == -1:
             return SafetyDecision(
                 tier=RoutingTier.BLOCKED,
                 composite_score=composite_score,
                 action_required="Reject",
-                reasoning=reason,
+                reasoning="Infrastructure failure (tests_failed=-1)",
             )
         
-        # LOW: Touches auth/crypto or low confidence, escalate for review
-        if patch.touches_auth_crypto or composite_score < self.SCORE_MEDIUM_THRESHOLD:
-            reason = "Auth/crypto code" if patch.touches_auth_crypto else f"Low confidence ({composite_score:.3f})"
-            
+        if validation.tests_failed == -2:
             return SafetyDecision(
-                tier=RoutingTier.LOW,
+                tier=RoutingTier.BLOCKED,
+                composite_score=composite_score,
+                action_required="Reject",
+                reasoning="Patch apply failure (tests_failed=-2)",
+            )
+        
+        # Score-based tier
+        if composite_score >= self.SCORE_HIGH_THRESHOLD:
+            tier = RoutingTier.HIGH
+        elif composite_score >= self.SCORE_MEDIUM_THRESHOLD:
+            tier = RoutingTier.MEDIUM
+        elif composite_score >= self.SCORE_LOW_THRESHOLD:
+            tier = RoutingTier.LOW
+        else:
+            tier = RoutingTier.BLOCKED
+        
+        # BLOCKED: test failures
+        if tier != RoutingTier.BLOCKED and validation.tests_failed > 0:
+            tier = RoutingTier.BLOCKED
+            return SafetyDecision(
+                tier=tier,
+                composite_score=composite_score,
+                action_required="Reject",
+                reasoning=f"{validation.tests_failed} test failure(s)",
+            )
+        
+        # LOW override: auth/crypto
+        if tier in (RoutingTier.HIGH, RoutingTier.MEDIUM) and patch.touches_auth_crypto:
+            tier = RoutingTier.LOW
+            return SafetyDecision(
+                tier=tier,
                 composite_score=composite_score,
                 action_required="Issue",
-                reasoning=reason,
+                reasoning="Patch touches auth/crypto code — forced to LOW",
             )
         
-        # MEDIUM: Needs human review (visual regression or medium confidence)
-        if validation.visual_regression or composite_score < self.SCORE_HIGH_THRESHOLD:
-            reason = "Visual regression detected" if validation.visual_regression else f"Score {composite_score:.3f} requires review"
-            
+        # MEDIUM override: visual regression
+        if tier == RoutingTier.HIGH and validation.visual_regression:
+            tier = RoutingTier.MEDIUM
             return SafetyDecision(
-                tier=RoutingTier.MEDIUM,
+                tier=tier,
                 composite_score=composite_score,
                 action_required="PR",
-                reasoning=reason,
+                reasoning="Visual regression detected — forced to MEDIUM",
             )
         
-        # HIGH: Auto-approve conditions met
+        # Map tier to action
+        action_map = {
+            RoutingTier.HIGH: "PR",
+            RoutingTier.MEDIUM: "PR",
+            RoutingTier.LOW: "Issue",
+            RoutingTier.BLOCKED: "Reject",
+        }
+        reasoning_map = {
+            RoutingTier.HIGH: f"All criteria met (score: {composite_score:.3f})",
+            RoutingTier.MEDIUM: f"Score {composite_score:.3f} requires review",
+            RoutingTier.LOW: f"Low confidence ({composite_score:.3f})",
+            RoutingTier.BLOCKED: f"Score {composite_score:.3f} below threshold",
+        }
+        
         return SafetyDecision(
-            tier=RoutingTier.HIGH,
+            tier=tier,
             composite_score=composite_score,
-            action_required="PR",
-            reasoning=f"All criteria met (score: {composite_score:.3f})",
+            action_required=action_map[tier],
+            reasoning=reasoning_map[tier],
         )

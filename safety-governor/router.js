@@ -31,9 +31,10 @@
  * @param {number} compositeScore - Composite confidence score (0–1)
  * @param {object} validationBundle - validation_bundle.json
  * @param {object} candidatePatch - candidate_patch.json
+ * @param {object} [structuredContext] - structured_context.json (optional, for fix_strategy check)
  * @returns {RouteResult}
  */
-function route(compositeScore, validationBundle, candidatePatch) {
+function route(compositeScore, validationBundle, candidatePatch, structuredContext) {
   // Start with score-based tier
   let tier;
   let action;
@@ -92,7 +93,7 @@ function route(compositeScore, validationBundle, candidatePatch) {
       tier = "MEDIUM";
       action = "REVIEW_PR";
       overrideReason = "Visual regression detected — forced to MEDIUM for human review";
-    } else if (candidatePatch.fix_strategy === "FULL_REFACTOR") {
+    } else if ((structuredContext && structuredContext.fix_strategy === "FULL_REFACTOR") || candidatePatch.fix_strategy === "FULL_REFACTOR") {
       tier = "MEDIUM";
       action = "REVIEW_PR";
       overrideReason = "Fix strategy is FULL_REFACTOR — forced to MEDIUM for human review";

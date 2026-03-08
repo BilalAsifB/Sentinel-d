@@ -15,6 +15,7 @@
 const { CosmosClient } = require("@azure/cosmos");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { writeResolutionRecord } = require("./write-client");
+const { withRetry } = require("../shared/retry");
 
 /**
  * Returns an authenticated Cosmos DB container handle.
@@ -58,9 +59,10 @@ async function getRecord(cveId) {
     parameters: [{ name: "@cveId", value: cveId }],
   };
 
-  const { resources } = await container.items
-    .query(querySpec)
-    .fetchAll();
+  const { resources } = await withRetry(
+    () => container.items.query(querySpec).fetchAll(),
+    { label: "cosmos-query" }
+  );
 
   return resources.length > 0 ? resources[0] : null;
 }

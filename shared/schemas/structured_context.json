@@ -59,6 +59,14 @@
     },
     "pipeline_version": {
       "type": "string"
+    },
+    "intent_log_prob": {
+      "type": "number",
+      "description": "Log-probability from DistilBERT classifier, used by confidence scorer"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
     }
   },
   "additionalProperties": false

@@ -19,10 +19,11 @@ class NLPContextOrchestrator:
     
     Execution flow:
     1. Accept webhook_payload.json dictionary
-    2. Run NVDFetcher and StackOverflowFetcher in parallel using asyncio.gather
-    3. Pass NVD text sequentially to EntityExtractor
-    4. Pass Stack Overflow text sequentially to IntentClassifier
-    5. Assemble and return structured_context.json dictionary
+    2. Historical DB lookup (BEFORE API calls — spec requirement)
+    3. Run NVDFetcher and StackOverflowFetcher in parallel using asyncio.gather
+    4. Pass NVD text sequentially to EntityExtractor
+    5. Pass Stack Overflow text sequentially to IntentClassifier
+    6. Assemble and return structured_context.json dictionary
     """
 
     PIPELINE_VERSION = "1.0.0"
@@ -67,7 +68,16 @@ class NLPContextOrchestrator:
         cve_id: str = webhook_payload.get("cve_id", "")
         affected_package: str = webhook_payload.get("affected_package", "")
 
-        # Step 1 & 2: Run NVDFetcher and StackOverflowFetcher in parallel
+        # Step 1: Historical DB lookup FIRST (before API calls — spec requirement)
+        logger.debug("Performing historical database lookup (before API calls)")
+        historical_match = await self.historical_db_reader.lookup(
+            event_id=event_id,
+            cve_id=cve_id,
+            description=cve_id,
+            affected_package=affected_package
+        )
+
+        # Step 2: Run NVDFetcher and StackOverflowFetcher in parallel
         logger.debug(f"Fetching data in parallel for CVE {cve_id} and package {affected_package}")
         nvd_data, stackoverflow_data = await asyncio.gather(
             self.nvd_fetcher.fetch(cve_id),
@@ -95,16 +105,7 @@ class NLPContextOrchestrator:
         logger.debug("Classifying community intent from StackOverflow text")
         community_intent_class, intent_confidence = self.intent_classifier.classify(stackoverflow_text)
 
-        # Step 5: Historical DB lookup for RAG data
-        logger.debug("Performing historical database lookup")
-        historical_match = await self.historical_db_reader.lookup(
-            event_id=event_id,
-            cve_id=cve_id,
-            description=nvd_text,
-            affected_package=affected_package
-        )
-
-        # Step 6: Assemble structured context
+        # Step 5 (was step 6): Assemble structured context
         structured_context = self._assemble_context(
             event_id=event_id,
             cve_id=cve_id,
