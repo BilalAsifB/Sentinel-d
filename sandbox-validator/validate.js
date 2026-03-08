@@ -160,7 +160,7 @@ function runSSIM(eventId) {
     const currentPath = `/tmp/current-${route.slug}-${eventId}.png`;
 
     if (!fs.existsSync(baselinePath) || !fs.existsSync(currentPath)) {
-      console.log(`Skipping SSIM for ${route.slug}: missing screenshot(s)`);
+      console.log(JSON.stringify({ level: "info", message: `Skipping SSIM for ${route.slug}: missing screenshot(s)` }));
       continue;
     }
 
@@ -188,7 +188,7 @@ print(json.dumps(result))
         anyRegression = true;
       }
     } catch (err) {
-      console.error(`SSIM failed for ${route.slug}: ${err.message}`);
+      console.error(JSON.stringify({ level: "error", message: `SSIM failed for ${route.slug}`, error: err.message }));
     }
   }
 
@@ -229,16 +229,16 @@ async function validate(candidatePatch) {
 
   try {
     // Step 1: Trigger sandbox workflow
-    console.log(`Triggering sandbox workflow for event ${event_id}...`);
+    console.log(JSON.stringify({ level: "info", message: "Triggering sandbox workflow", event_id }));
     await triggerWorkflow(event_id, diff);
 
     // Step 2: Poll for completion
-    console.log("Polling for workflow completion (max 15 min)...");
+    console.log(JSON.stringify({ level: "info", message: "Polling for workflow completion (max 15 min)", event_id }));
     workflowRun = await pollWorkflowCompletion(event_id);
 
     if (!workflowRun) {
       // Workflow timeout
-      console.error("Workflow timed out");
+      console.error(JSON.stringify({ level: "error", message: "Workflow timed out", event_id }));
       return buildBundle(event_id, {
         tests_passed: 0,
         tests_failed: -1,
@@ -253,10 +253,10 @@ async function validate(candidatePatch) {
     }
 
     // Step 3: Download test results
-    console.log(`Workflow completed: ${workflowRun.conclusion}`);
+    console.log(JSON.stringify({ level: "info", message: "Workflow completed", event_id, conclusion: workflowRun.conclusion }));
     testResults = await downloadTestResults(workflowRun.id);
   } catch (err) {
-    console.error(`Sandbox execution failed: ${err.message}`);
+    console.error(JSON.stringify({ level: "error", message: "Sandbox execution failed", event_id, error: err.message }));
     return buildBundle(event_id, {
       tests_passed: 0,
       tests_failed: -2,
@@ -271,7 +271,7 @@ async function validate(candidatePatch) {
   }
 
   // Step 4: Run SSIM comparison
-  console.log("Running SSIM visual regression analysis...");
+  console.log(JSON.stringify({ level: "info", message: "Running SSIM visual regression analysis", event_id }));
   const ssimResults = runSSIM(event_id);
 
   // Step 5: Assemble validation bundle
@@ -304,6 +304,7 @@ function buildBundle(eventId, fields) {
     event_id: eventId,
     tests_passed: fields.tests_passed,
     tests_failed: fields.tests_failed,
+    validation_status: fields.validation_status,
     coverage_before: fields.coverage_before,
     coverage_after: fields.coverage_after,
     visual_diff_pct: fields.visual_diff_pct,

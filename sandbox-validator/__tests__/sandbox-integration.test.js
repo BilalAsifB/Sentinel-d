@@ -70,6 +70,7 @@ const REQUIRED_BUNDLE_KEYS = [
   "event_id",
   "tests_passed",
   "tests_failed",
+  "validation_status",
   "coverage_before",
   "coverage_after",
   "visual_diff_pct",
@@ -100,6 +101,7 @@ describe("Sandbox Validator — buildBundle", () => {
     const bundle = buildBundle("550e8400-e29b-41d4-a716-446655440000", {
       tests_passed: 42,
       tests_failed: 0,
+      validation_status: "COMPLETED",
       coverage_before: 0.85,
       coverage_after: 0.87,
       visual_diff_pct: 0.001,
@@ -117,6 +119,7 @@ describe("Sandbox Validator — buildBundle", () => {
     const bundle = buildBundle("550e8400-e29b-41d4-a716-446655440000", {
       tests_passed: 10,
       tests_failed: 2,
+      validation_status: "COMPLETED",
       coverage_before: 0.80,
       coverage_after: 0.78,
       visual_diff_pct: 0.05,
@@ -161,6 +164,7 @@ describe("Sandbox Validator — Clean Patch (Log4Shell fix)", () => {
     const bundle = buildBundle(EVENT_ID, {
       tests_passed: 47,
       tests_failed: 0,
+      validation_status: "COMPLETED",
       coverage_before: 0.82,
       coverage_after: 0.82,
       visual_diff_pct: 0,
@@ -224,6 +228,7 @@ describe("Sandbox Validator — Broken Patch (still vulnerable)", () => {
     const bundle = buildBundle(EVENT_ID, {
       tests_passed: 30,
       tests_failed: 5,
+      validation_status: "COMPLETED",
       coverage_before: 0.82,
       coverage_after: 0.75,
       visual_diff_pct: 0.04,
@@ -257,10 +262,11 @@ describe("Sandbox Validator — Broken Patch (still vulnerable)", () => {
 });
 
 describe("Sandbox Validator — Edge Cases", () => {
-  test("CANNOT_PATCH status produces failure sentinel", () => {
+  test("CANNOT_PATCH status produces CANNOT_PATCH validation_status", () => {
     const bundle = buildBundle("cannot-patch-001", {
       tests_passed: 0,
-      tests_failed: -2,
+      tests_failed: 0,
+      validation_status: "CANNOT_PATCH",
       coverage_before: 0,
       coverage_after: 0,
       visual_diff_pct: 0,
@@ -271,14 +277,16 @@ describe("Sandbox Validator — Edge Cases", () => {
     });
 
     validateBundleShape(bundle);
-    expect(bundle.tests_failed).toBe(-2);
+    expect(bundle.tests_failed).toBe(0);
+    expect(bundle.validation_status).toBe("CANNOT_PATCH");
     expect(bundle.tests_passed).toBe(0);
   });
 
-  test("workflow timeout produces -1 sentinel", () => {
+  test("workflow timeout produces TIMEOUT validation_status", () => {
     const bundle = buildBundle("timeout-001", {
       tests_passed: 0,
-      tests_failed: -1,
+      tests_failed: 0,
+      validation_status: "TIMEOUT",
       coverage_before: 0,
       coverage_after: 0,
       visual_diff_pct: 0,
@@ -289,7 +297,8 @@ describe("Sandbox Validator — Edge Cases", () => {
     });
 
     validateBundleShape(bundle);
-    expect(bundle.tests_failed).toBe(-1);
+    expect(bundle.tests_failed).toBe(0);
+    expect(bundle.validation_status).toBe("TIMEOUT");
   });
 
   test("touches_auth_crypto flag is preserved in candidate patch context", () => {
@@ -313,6 +322,7 @@ describe("Sandbox Validator — Edge Cases", () => {
     const bundle = buildBundle(candidatePatch.event_id, {
       tests_passed: 10,
       tests_failed: 0,
+      validation_status: "COMPLETED",
       coverage_before: 0.80,
       coverage_after: 0.82,
       visual_diff_pct: 0.001,

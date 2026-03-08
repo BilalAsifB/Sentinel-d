@@ -59,11 +59,11 @@ function route(compositeScore, validationBundle, candidatePatch) {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Patch generator returned CANNOT_PATCH";
-  } else if (validationBundle.tests_failed === -1) {
+  } else if (validationBundle.validation_status === "TIMEOUT") {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Infrastructure failure: sandbox workflow timed out";
-  } else if (validationBundle.tests_failed === -2) {
+  } else if (validationBundle.validation_status === "CANNOT_PATCH" || validationBundle.validation_status === "INFRASTRUCTURE_FAILURE") {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Patch apply failure: git apply failed in sandbox";

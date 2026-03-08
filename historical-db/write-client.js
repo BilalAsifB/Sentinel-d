@@ -1,11 +1,40 @@
 const { CosmosClient } = require("@azure/cosmos");
 const { DefaultAzureCredential } = require("@azure/identity");
+const { withRetry } = require("../shared/retry");
 const Ajv = require("ajv");
 const addFormats = require("ajv-formats");
 const path = require("path");
 const fs = require("fs");
 
 require("dotenv").config();
+
+const logger = {
+  info: (data) => process.env.NODE_ENV !== "test" && console.log(JSON.stringify({ level: "info", ...data })),
+  error: (data) => console.error(JSON.stringify({ level: "error", ...data })),
+};
+
+// Singleton CosmosClient — lazy initialized
+let _cosmosContainer = null;
+
+/**
+ * Get (or create) the singleton Cosmos container reference.
+ * @returns {import("@azure/cosmos").Container}
+ */
+function getCosmosContainer() {
+  if (!_cosmosContainer) {
+    const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
+    if (!COSMOS_ENDPOINT) {
+      throw new Error("Missing COSMOS_DB_ENDPOINT or COSMOS_ENDPOINT environment variable");
+    }
+    const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
+    const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
+
+    const credential = new DefaultAzureCredential();
+    const client = new CosmosClient({ endpoint: COSMOS_ENDPOINT, aadCredentials: credential });
+    _cosmosContainer = client.database(DATABASE_NAME).container(CONTAINER_NAME);
+  }
+  return _cosmosContainer;
+}
 
 // Load and compile schema
 let validate;
@@ -43,29 +72,21 @@ async function writeResolutionRecord(record) {
     throw new Error(`Schema validation failed: ${errors.join("; ")}`);
   }
 
-  const COSMOS_ENDPOINT = process.env.COSMOS_DB_ENDPOINT || process.env.COSMOS_ENDPOINT;
-  if (!COSMOS_ENDPOINT) {
-    throw new Error("Missing COSMOS_DB_ENDPOINT or COSMOS_ENDPOINT environment variable");
-  }
-  const DATABASE_NAME = process.env.COSMOS_DB_DATABASE || process.env.COSMOS_DB_NAME || "sentinel";
-  const CONTAINER_NAME = process.env.COSMOS_DB_CONTAINER || process.env.COSMOS_CONTAINER_NAME || "historical_records";
+  const container = getCosmosContainer();
 
-  const credential = new DefaultAzureCredential();
-  const client = new CosmosClient({ endpoint: COSMOS_ENDPOINT, aadCredentials: credential });
-  const container = client.database(DATABASE_NAME).container(CONTAINER_NAME);
-
-  const { resource } = await container.items.upsert(record);
-
-  console.log(
-    JSON.stringify({
-      message: "Historical DB record written",
-      documentId: resource.id,
-      cveId: record.cve_id,
-      outcome: record.patch_outcome,
-    })
+  const { resource } = await withRetry(
+    () => container.items.upsert(record),
+    { label: "cosmos-upsert" }
   );
+
+  logger.info({
+    message: "Historical DB record written",
+    documentId: resource.id,
+    cveId: record.cve_id,
+    outcome: record.patch_outcome,
+  });
 
   return { id: resource.id };
 }
 
-module.exports = { writeResolutionRecord };
+module.exports = { writeResolutionRecord, getCosmosContainer, _resetForTest: () => { _cosmosContainer = null; } };

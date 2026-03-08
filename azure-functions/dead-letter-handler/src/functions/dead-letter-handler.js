@@ -19,9 +19,10 @@ const { Octokit } = require("@octokit/rest");
  *
  * @param {object[]} messages - Dead-letter messages
  * @param {object} options - Environment config
+ * @param {object|null} context - Azure Functions invocation context for structured logging
  * @returns {Promise<{processed: number, issuesCreated: number}>}
  */
-async function processDeadLetters(messages, options = {}) {
+async function processDeadLetters(messages, options = {}, context = null) {
   const {
     githubToken = process.env.GITHUB_TOKEN,
     githubOwner = process.env.GITHUB_OWNER,
@@ -40,8 +41,11 @@ async function processDeadLetters(messages, options = {}) {
     const deadLetterDescription = msg.deadLetterErrorDescription || "";
     const enqueuedTime = msg.enqueuedTimeUtc || msg._rawAmqpMessage?.messageAnnotations?.["x-opt-enqueued-time"];
 
+    const log = context?.log ?? (() => {});
+    const logError = context?.error ?? (() => {});
+
     // Structured log for App Insights
-    console.log(
+    log(
       JSON.stringify({
         message: "Dead-letter message processed",
         messageId: msg.messageId,
@@ -104,7 +108,7 @@ This message will NOT be automatically retried.`,
 
         issuesCreated++;
       } catch (err) {
-        console.error(
+        logError(
           JSON.stringify({
             message: "Failed to create DLQ GitHub Issue",
             error: err.message,
@@ -174,7 +178,7 @@ app.timer("dead-letter-handler", {
       }
 
       context.log(`Processing ${messages.length} dead-letter message(s)`);
-      const result = await processDeadLetters(messages);
+      const result = await processDeadLetters(messages, {}, context);
       context.log(
         `Processed ${result.processed} messages, created ${result.issuesCreated} issues`
       );
