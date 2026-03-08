@@ -3,8 +3,6 @@ const { DefaultAzureCredential } = require("@azure/identity");
 
 require("dotenv").config();
 
-const TABLE_STORAGE_CONN = process.env.TABLE_STORAGE_CONN_STRING;
-const TABLE_STORAGE_ACCOUNT = process.env.TABLE_STORAGE_ACCOUNT;
 const TABLE_NAME = "deferredbacklog";
 
 /**
@@ -16,6 +14,8 @@ const TABLE_NAME = "deferredbacklog";
  * @param {string} annotation - Human annotation for the deferral
  */
 async function writeDeferred(eventId, cveId, deferralTimestamp, annotation) {
+  const TABLE_STORAGE_CONN = process.env.TABLE_STORAGE_CONN_STRING;
+  const TABLE_STORAGE_ACCOUNT = process.env.TABLE_STORAGE_ACCOUNT || process.env.STORAGE_ACCOUNT_NAME;
   let tableClient;
 
   if (TABLE_STORAGE_CONN) {

@@ -4,9 +4,6 @@ const { parseIssueMetadata } = require("./parse-issue");
 
 require("dotenv").config();
 
-const SB_NAMESPACE = process.env.SERVICE_BUS_NAMESPACE;
-const SB_QUEUE = process.env.SERVICE_BUS_QUEUE_NAME || "vulnerability-events";
-
 /**
  * Handle the sentinel/fix-now label: re-queue the event as ACTIVE.
  * Sends the original event payload to Service Bus with status override.
@@ -16,13 +13,19 @@ const SB_QUEUE = process.env.SERVICE_BUS_QUEUE_NAME || "vulnerability-events";
 async function handleFixNow(issueBody) {
   const metadata = parseIssueMetadata(issueBody);
 
+  const SB_NAMESPACE = process.env.SERVICE_BUS_NAMESPACE;
+  const SB_QUEUE = process.env.SERVICE_BUS_QUEUE_NAME || "vulnerability-events";
+
   if (!SB_NAMESPACE) {
     throw new Error("SERVICE_BUS_NAMESPACE environment variable is required");
   }
 
+  const namespace = SB_NAMESPACE.includes('.servicebus.windows.net')
+    ? SB_NAMESPACE
+    : `${SB_NAMESPACE}.servicebus.windows.net`;
   const credential = new DefaultAzureCredential();
   const client = new ServiceBusClient(
-    `${SB_NAMESPACE}.servicebus.windows.net`,
+    namespace,
     credential
   );
   const sender = client.createSender(SB_QUEUE);

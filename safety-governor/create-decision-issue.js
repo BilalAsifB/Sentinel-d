@@ -1,10 +1,9 @@
 const { Octokit } = require("@octokit/rest");
 
-require("dotenv").config();
+if (!process.env.JEST_WORKER_ID) {
+  require("dotenv").config({ path: require("path").resolve(__dirname, "..", ".env") });
+}
 
-const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
-const GITHUB_OWNER = process.env.GITHUB_OWNER;
-const GITHUB_REPO = process.env.GITHUB_REPO;
 const SECURITY_TEAM_GITHUB_LOGIN = process.env.SECURITY_TEAM_GITHUB_LOGIN;
 
 /**
@@ -110,6 +109,10 @@ Choose **one** of the following labels to proceed:
  * @returns {Promise<{issueNumber: number, issueUrl: string}>}
  */
 async function createDecisionIssue(telemetryClassification, historicalMatch, webhookPayload) {
+  const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
+  const GITHUB_OWNER = process.env.GITHUB_OWNER || process.env.GITHUB_REPO_OWNER;
+  const GITHUB_REPO = process.env.GITHUB_REPO || process.env.GITHUB_REPO_NAME;
+
   if (!GITHUB_TOKEN) {
     throw new Error("GITHUB_TOKEN environment variable is required");
   }

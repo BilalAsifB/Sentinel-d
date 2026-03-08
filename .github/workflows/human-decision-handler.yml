@@ -28,18 +28,15 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Send ACTIVE override to Service Bus
+        uses: actions/github-script@v7
         env:
           SERVICE_BUS_NAMESPACE: ${{ secrets.SERVICE_BUS_NAMESPACE }}
           SERVICE_BUS_QUEUE_NAME: ${{ secrets.SERVICE_BUS_QUEUE_NAME }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          node -e "
+        with:
+          script: |
             const { handleFixNow } = require('./safety-governor/handlers/fix-now');
-            const issueBody = process.env.ISSUE_BODY;
-            handleFixNow(issueBody)
-              .then(r => console.log(JSON.stringify({ message: 'fix-now processed', ...r })))
-              .catch(e => { console.error(e.message); process.exit(1); });
-          "
+            const result = await handleFixNow(context.payload.issue.body);
+            console.log(JSON.stringify({ message: 'fix-now processed', ...result }));
 
       - name: Comment and close issue
         uses: actions/github-script@v7
@@ -82,20 +79,17 @@ jobs:
 
       - name: Write to deferred backlog
         id: defer
+        uses: actions/github-script@v7
         env:
           TABLE_STORAGE_CONN_STRING: ${{ secrets.TABLE_STORAGE_CONN_STRING }}
           TABLE_STORAGE_ACCOUNT: ${{ secrets.TABLE_STORAGE_ACCOUNT }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          RESULT=$(node -e "
+        with:
+          script: |
             const { handleDefer } = require('./safety-governor/handlers/defer');
-            const issueBody = process.env.ISSUE_BODY;
-            handleDefer(issueBody)
-              .then(r => console.log(JSON.stringify(r)))
-              .catch(e => { console.error(e.message); process.exit(1); });
-          ")
-          DEFER_DATE=$(echo "$RESULT" | jq -r '.defer_until' | cut -dT -f1)
-          echo "defer_date=$DEFER_DATE" >> $GITHUB_OUTPUT
+            const result = await handleDefer(context.payload.issue.body);
+            const deferDate = result.defer_until.split('T')[0];
+            core.setOutput('defer_date', deferDate);
+            console.log(JSON.stringify(result));
 
       - name: Comment and close issue
         uses: actions/github-script@v7
@@ -138,21 +132,18 @@ jobs:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Write ACCEPTED_RISK to Cosmos DB
+        uses: actions/github-script@v7
         env:
           COSMOS_DB_ENDPOINT: ${{ secrets.COSMOS_DB_ENDPOINT }}
           COSMOS_DB_DATABASE: ${{ secrets.COSMOS_DB_DATABASE }}
           COSMOS_DB_CONTAINER: ${{ secrets.COSMOS_DB_CONTAINER }}
-          ISSUE_BODY: ${{ github.event.issue.body }}
-        run: |
-          node -e "
+        with:
+          script: |
             const { handleWontFix } = require('./safety-governor/handlers/wont-fix');
-            const issueBody = process.env.ISSUE_BODY;
-            const decidedBy = '${{ github.event.sender.login }}';
-            const issueUrl = '${{ github.event.issue.html_url }}';
-            handleWontFix(issueBody, decidedBy, issueUrl)
-              .then(r => console.log(JSON.stringify({ message: 'accepted-risk recorded', ...r })))
-              .catch(e => { console.error(e.message); process.exit(1); });
-          "
+            const decidedBy = context.payload.sender.login;
+            const issueUrl = context.payload.issue.html_url;
+            const result = await handleWontFix(context.payload.issue.body, decidedBy, issueUrl);
+            console.log(JSON.stringify({ message: 'accepted-risk recorded', ...result }));
 
       - name: Comment and close issue
         uses: actions/github-script@v7

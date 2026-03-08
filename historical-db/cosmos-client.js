@@ -16,19 +16,23 @@ const { CosmosClient } = require("@azure/cosmos");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { writeResolutionRecord } = require("./write-client");
 
-const COSMOS_ENDPOINT = process.env.COSMOS_ENDPOINT || process.env.COSMOS_DB_ENDPOINT;
-const DATABASE_NAME = process.env.COSMOS_DB_NAME || process.env.COSMOS_DB_DATABASE || "sentinel";
-const CONTAINER_NAME =
-  process.env.COSMOS_CONTAINER_NAME || process.env.COSMOS_DB_CONTAINER || "historical_records";
-
 /**
  * Returns an authenticated Cosmos DB container handle.
+ * Reads env vars at call time (not module load) for test flexibility.
  * @returns {import('@azure/cosmos').Container}
  */
 function getContainer() {
+  const endpoint = process.env.COSMOS_ENDPOINT || process.env.COSMOS_DB_ENDPOINT;
+  const databaseName = process.env.COSMOS_DB_NAME || process.env.COSMOS_DB_DATABASE || "sentinel";
+  const containerName = process.env.COSMOS_CONTAINER_NAME || process.env.COSMOS_DB_CONTAINER || "historical_records";
+
+  if (!endpoint) {
+    throw new Error("Missing COSMOS_ENDPOINT or COSMOS_DB_ENDPOINT environment variable");
+  }
+
   const credential = new DefaultAzureCredential();
-  const client = new CosmosClient({ endpoint: COSMOS_ENDPOINT, aadCredentials: credential });
-  return client.database(DATABASE_NAME).container(CONTAINER_NAME);
+  const client = new CosmosClient({ endpoint, aadCredentials: credential });
+  return client.database(databaseName).container(containerName);
 }
 
 /**
