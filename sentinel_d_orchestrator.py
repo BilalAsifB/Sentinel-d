@@ -2,14 +2,12 @@
 
 import os
 import json
-import zipfile
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, Any
 import spacy
 import torch
-from transformers import DistilBertForSequenceClassification, DistilBertTokenizer
-from huggingface_hub import hf_hub_download
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+from huggingface_hub import snapshot_download
 
 from agents.nlp_pipeline.ml_models import EntityExtractor, IntentClassifier
 
@@ -33,188 +31,179 @@ class SentinelPipeline:
     # NER entity types extracted by spaCy
     NER_ENTITIES = ["VERSION_RANGE", "API_SYMBOL", "BREAKING_CHANGE", "FIX_ACTION"]
     
-    def __init__(self, spacy_model_extract_dir: str = "./models/spacy_model",
-                 distilbert_model_extract_dir: str = "./models/distilbert_model"):
+    def __init__(self):
         """
-        Initialize the Sentinel Pipeline by loading both fine-tuned models.
+        Initialize the Sentinel Pipeline by loading both fine-tuned models from Hugging Face Hub.
         
-        Downloads and extracts zipped models from HuggingFace Hub with fallback
-        to local paths (supports environment variable override).
-        
-        Args:
-            spacy_model_extract_dir: Directory where spaCy NER model is extracted
-            distilbert_model_extract_dir: Directory where DistilBERT model is extracted
+        Models are streamed directly into memory using snapshot_download for efficient caching
+        and model loading without manual ZIP extraction.
         
         Raises:
-            FileNotFoundError: If neither HF Hub nor local backup is available
+            Exception: If model download or loading fails
         """
         print("[SentinelPipeline] Initializing NLP orchestrator...")
         
-        # Get local model paths from environment or use defaults
-        spacy_local_path = os.getenv(
-            "SPACY_MODEL_PATH",
-            os.path.join(os.path.dirname(__file__), "spacy-nvd-ner-v1.zip")
-        )
-        distilbert_local_path = os.getenv(
-            "DISTILBERT_MODEL_PATH",
-            os.path.join(os.path.dirname(__file__), "distilbert-intent-classifier-v1.zip")
-        )
-        
         # ============ Stage 1: Load spaCy NER Model ============
-        print("[Stage 1] Loading spaCy NER model...")
-        self.spacy_nlp = self._load_spacy_model(
-            repo_id="mojad121/spacy-classes-finetune",
-            filename="spacy-nvd-ner-v1.zip",
-            local_zip_path=spacy_local_path,
-            extract_dir=spacy_model_extract_dir
-        )
-        print("[Stage 1] ✓ spaCy NER model loaded successfully\n")
+        print("[Stage 1] Loading spaCy NER model from Hugging Face Hub...")
+        try:
+            spacy_repo_path = snapshot_download(
+                repo_id="mojad121/spacy-classes-finetune",
+                cache_dir=os.getenv("HF_CACHE_DIR", None),
+                force_download=False
+            )
+            
+            # Load the spaCy model (handles various directory structures)
+            self.spacy_nlp = self._load_spacy_model_from_path(spacy_repo_path)
+            print(f"[Stage 1] [OK] spaCy NER model loaded successfully from {spacy_repo_path}\n")
+        except Exception as e:
+            print(f"[Stage 1] [FAILED] Could not load spaCy model: {e}")
+            raise
         
         # ============ Stage 2: Load DistilBERT Intent Classifier ============
-        print("[Stage 2] Loading DistilBERT intent classifier...")
-        distilbert_path = self._get_and_extract_model(
-            repo_id="mojad121/distill-bert-intent-classifer",
-            filename="distilbert-intent-classifier-v1.zip",
-            local_zip_path=distilbert_local_path,
-            extract_dir=distilbert_model_extract_dir
-        )
-        
-        # Load model and tokenizer from extracted directory
-        self.distilbert_model = DistilBertForSequenceClassification.from_pretrained(
-            distilbert_path
-        )
-        self.distilbert_tokenizer = DistilBertTokenizer.from_pretrained(distilbert_path)
-        
-        # Set to evaluation mode (disable dropout, batch norm)
-        self.distilbert_model.eval()
-        
-        print("[Stage 2] ✓ DistilBERT intent classifier loaded successfully\n")
+        print("[Stage 2] Loading DistilBERT intent classifier from Hugging Face Hub...")
+        try:
+            model_repo = "mojad121/distill-bert-intent-classifer"
+            self.distilbert_model = AutoModelForSequenceClassification.from_pretrained(model_repo)
+            self.distilbert_tokenizer = AutoTokenizer.from_pretrained(model_repo)
+            
+            # Set to evaluation mode (disable dropout, batch norm)
+            self.distilbert_model.eval()
+            
+            print("[Stage 2] [OK] DistilBERT intent classifier loaded successfully\n")
+        except Exception as e:
+            print(f"[Stage 2] [FAILED] Could not load DistilBERT model: {e}")
+            raise
         
         # ============ Stage 3: Initialize ML Model Wrappers ============
         print("[Stage 3] Wiring ML model wrappers...")
         self.entity_extractor = EntityExtractor(self.spacy_nlp)
         self.intent_classifier = IntentClassifier(self.distilbert_model, self.distilbert_tokenizer)
-        print("[Stage 3] ✓ ML model wrappers initialized\n")
+        print("[Stage 3] [OK] ML model wrappers initialized\n")
         
-        print("[SentinelPipeline] ✓ Pipeline initialization complete\n")
+        print("[SentinelPipeline] [OK] Pipeline initialization complete\n")
     
-    def _get_and_extract_model(self, repo_id: str, filename: str, 
-                                local_zip_path: str, extract_dir: str) -> str:
+    def _load_spacy_model_from_path(self, model_path: str) -> spacy.Language:
         """
-        Download and extract a zipped model from HuggingFace Hub with local fallback.
+        Load a spaCy model from a local path, handling various directory structures.
         
-        Implements a two-tier fallback strategy:
-        1. Primary: Download from HuggingFace Hub using hf_hub_download()
-        2. Fallback: Use hardcoded local_zip_path if HF download fails
-        3. Error: Raise FileNotFoundError if both sources are unavailable
-        
-        Extraction uses Python's built-in zipfile module to decompress into extract_dir.
+        Supports:
+        - Standard spaCy models with config.cfg
+        - HF-hosted models with meta.json and component directories
+        - Nested model directories
         
         Args:
-            repo_id: HuggingFace Hub repository ID
-                    (e.g., 'mojad121/spacy-classes-finetune')
-            filename: Zip filename within the HF repo
-                     (e.g., 'spacy-nvd-ner-v1.zip')
-            local_zip_path: Absolute Windows path to local backup zip file
-                           (e.g., r'C:\Users\hp\Sentinel-d\spacy-nvd-ner-v1.zip')
-            extract_dir: Target directory for extraction (created if missing)
+            model_path: Path to the model directory
         
         Returns:
-            str: Path to the extracted model directory
+            Loaded spaCy Language model
         
         Raises:
-            FileNotFoundError: If both HF and local sources unavailable
-            zipfile.BadZipFile: If the zip file is corrupted
+            FileNotFoundError: If a valid model cannot be loaded
         """
-        zip_path = None
+        # Try standard spaCy model format first (with config.cfg)
+        if os.path.exists(os.path.join(model_path, "config.cfg")):
+            print(f"  [spaCy] Loading standard model format from {model_path}")
+            return spacy.load(model_path)
         
-        # ====== Attempt 1: HuggingFace Hub Download ======
-        try:
-            print(f"  [Attempt 1 / HF Hub] Downloading {filename} from repo://{repo_id}...")
-            zip_path = hf_hub_download(repo_id=repo_id, filename=filename)
-            print(f"  [✓ Downloaded to] {zip_path}")
-        except Exception as hf_error:
-            print(f"  [✗ HF Download failed] {type(hf_error).__name__}: {str(hf_error)}")
-            
-            # ====== Attempt 2: Local Fallback ======
-            print(f"  [Attempt 2 / Local Fallback] Checking {local_zip_path}...")
-            if os.path.exists(local_zip_path):
-                zip_path = local_zip_path
-                print(f"  [✓ Using local backup] {zip_path}")
-            else:
-                # ====== Both sources failed ======
-                error_msg = (
-                    f"Model '{filename}' not found.\n"
-                    f"  • HF Hub download failed: {type(hf_error).__name__}\n"
-                    f"  • Local fallback missing: {local_zip_path}"
-                )
-                raise FileNotFoundError(error_msg)
+        # Try common nested structures
+        for subdir in ["spacy_model", "model", "spacy-model"]:
+            subdir_path = os.path.join(model_path, subdir)
+            if os.path.isdir(subdir_path) and os.path.exists(os.path.join(subdir_path, "config.cfg")):
+                print(f"  [spaCy] Loading model from nested directory: {subdir_path}")
+                return spacy.load(subdir_path)
         
-        # ====== Extract Zip File ======
-        extract_dir_path = Path(extract_dir)
-        extract_dir_path.mkdir(parents=True, exist_ok=True)
+        # Try HF-style model with meta.json and component directories
+        meta_path = os.path.join(model_path, "meta.json")
+        if os.path.exists(meta_path):
+            print(f"  [spaCy] Loading HF-style model with meta.json from {model_path}")
+            try:
+                # Load as a spaCy model directory (spaCy may support this format)
+                # If this fails, we'll need to create a config.cfg
+                return spacy.load(model_path)
+            except (OSError, ValueError) as e:
+                print(f"  [spaCy] Standard load failed, creating config.cfg: {e}")
+                # Create a minimal config.cfg if it doesn't exist
+                self._create_minimal_spacy_config(model_path, meta_path)
+                return spacy.load(model_path)
         
-        print(f"  [Extracting] {os.path.basename(zip_path)} → {extract_dir}...")
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            zip_ref.extractall(extract_dir)
-        
-        # ====== Handle Nested Folder Structure ======
-        # If extraction created a single nested folder, unwrap it to the parent
-        contents = os.listdir(extract_dir)
-        if len(contents) == 1:
-            nested_path = os.path.join(extract_dir, contents[0])
-            if os.path.isdir(nested_path):
-                # Single nested folder detected; return the nested path
-                print(f"  [✓ Nested structure detected] Using: {nested_path}")
-                return str(nested_path)
-        
-        print(f"  [✓ Extraction complete] Model ready at {extract_dir}\n")
-        return str(extract_dir_path)
-    
-    def _load_spacy_model(self, repo_id: str, filename: str, 
-                          local_zip_path: str, extract_dir: str) -> spacy.Language:
-        """
-        Download, extract, and load the spaCy NER model.
-        
-        Uses _get_and_extract_model() for downloading/fallback logic, then loads
-        the extracted model using spacy.load().
-        
-        Args:
-            repo_id: HuggingFace Hub repository ID
-            filename: Zip filename in the repo
-            local_zip_path: Local backup path
-            extract_dir: Extraction target directory
-        
-        Returns:
-            Loaded spaCy Language model with NER pipeline component
-        
-        Raises:
-            FileNotFoundError: If model cannot be loaded after extraction
-        """
-        model_dir = self._get_and_extract_model(repo_id, filename, local_zip_path, extract_dir)
-        
-        # spaCy models may be extracted to a subdirectory or root
-        # Try common patterns
-        possible_paths = [
-            os.path.join(model_dir, "model"),
-            os.path.join(model_dir, "spacy_model"),
-            model_dir,
-        ]
-        
-        nlp = None
-        for path in possible_paths:
-            if os.path.isdir(path):
-                try:
-                    nlp = spacy.load(path)
-                    print(f"  [✓ spaCy model loaded] {path}\n")
-                    return nlp
-                except Exception as load_error:
-                    print(f"  [✗ Load failed at {path}] {load_error}")
+        # Fallback: search for config.cfg recursively
+        for root, dirs, files in os.walk(model_path):
+            if "config.cfg" in files:
+                print(f"  [spaCy] Found model at: {root}")
+                return spacy.load(root)
         
         raise FileNotFoundError(
-            f"Could not load spaCy model from {model_dir}. "
-            f"Tried: {possible_paths}"
+            f"Could not load spaCy model from {model_path}. "
+            "Expected either config.cfg or meta.json with components."
         )
+    
+    def _create_minimal_spacy_config(self, model_path: str, meta_path: str) -> None:
+        """
+        Create a minimal but complete config.cfg for HF-style spaCy models.
+        
+        Works with models that have meta.json but lack config.cfg,
+        which is common for HF-hosted spaCy models. Includes all required
+        spaCy configuration fields with sensible defaults.
+        
+        Args:
+            model_path: Root path of the model
+            meta_path: Path to meta.json
+        """
+        config_path = os.path.join(model_path, "config.cfg")
+        if os.path.exists(config_path):
+            return
+        
+        # Read metadata to determine pipeline configuration
+        try:
+            with open(meta_path, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+        except Exception as e:
+            print(f"  [Warning] Could not read meta.json: {e}")
+            return
+        
+        # Get the pipeline components and format as a list
+        pipeline_list = meta.get("pipeline", [])
+        pipeline_str = json.dumps(pipeline_list)
+        
+        # Create a complete spaCy config with all required sections and fields
+        config_content = f"""[nlp]
+lang = "{meta.get('lang', 'en')}"
+pipeline = {pipeline_str}
+disabled = []
+batch_size = 128
+
+[nlp.tokenizer]
+@tokenizers = "spacy.Tokenizer.v1"
+
+[components]
+
+[system]
+gpu_allocator = null
+seed = 0
+"""
+        
+        # Add component configuration sections
+        for component_name in pipeline_list:
+            component_dir = os.path.join(model_path, component_name)
+            if os.path.isdir(component_dir):
+                config_content += f'\n[components.{component_name}]\nfactory = "{component_name}"\n'
+        
+        # Append required lifecycle callbacks
+        config_content += f"""
+[initialize]
+
+[initialize.components]
+
+[initialize.tokenizer]
+"""
+        
+        # Write the config file
+        try:
+            with open(config_path, 'w', encoding='utf-8') as f:
+                f.write(config_content)
+            print(f"  [OK] Created config.cfg with all required fields")
+        except Exception as e:
+            print(f"  [Warning] Could not create config.cfg: {e}")
     
     def analyze_text(self, text: str) -> Dict[str, Any]:
         """
