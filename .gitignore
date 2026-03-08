@@ -33,7 +33,7 @@ Thumbs.db
 test_results.json
 *.png
 diff.png
-validation_bundle.json
+/validation_bundle.json
 
 # Logs
 *.log
