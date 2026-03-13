@@ -210,22 +210,38 @@ async def _route_deferred(
 
     wrapper_script = f"""
     const {{ writeDeferred }} = require('{backlog_writer_path}');
-    writeDeferred(
-      '{original_event["event_id"]}',
-      '{original_event["cve_id"]}',
-      '{defer_until}',
-      'Auto-deferred by SRE Agent classification'
-    ).then(() => {{
-      process.stdout.write(JSON.stringify({{ success: true }}));
-    }}).catch(err => {{
-      process.stderr.write(err.message);
-      process.exit(1);
+    let data = '';
+    process.stdin.on('data', chunk => data += chunk);
+    process.stdin.on('end', async () => {{
+      try {{
+        const input = JSON.parse(data);
+        await writeDeferred(
+          input.event_id,
+          input.cve_id,
+          input.defer_until,
+          input.annotation,
+          input.original_payload
+        );
+        process.stdout.write(JSON.stringify({{ success: true }}));
+      }} catch (err) {{
+        process.stderr.write(err.message);
+        process.exit(1);
+      }}
     }});
     """
+
+    deferred_input = json.dumps({
+        "event_id": original_event["event_id"],
+        "cve_id": original_event["cve_id"],
+        "defer_until": defer_until,
+        "annotation": "Auto-deferred by SRE Agent classification",
+        "original_payload": original_event,
+    })
 
     try:
         proc = subprocess.run(
             ["node", "-e", wrapper_script],
+            input=deferred_input,
             capture_output=True,
             text=True,
             timeout=30,

@@ -1,0 +1,19 @@
+{
+  "name": "sentinel-d-demo-app",
+  "version": "1.0.0",
+  "description": "Vulnerable Node.js Express app for Sentinel-D demo — deliberately uses outdated dependencies to trigger GHAS alerts",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed-telemetry": "node seed-telemetry.js",
+    "seed-historical-db": "node seed-historical-db.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "log4js": "4.0.0",
+    "lodash": "4.17.20",
+    "jsonwebtoken": "8.5.0"
+  },
+  "devDependencies": {},
+  "private": true
+}

@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Validation Bundle",
+  "description": "DEV B OWNS THIS — Sandbox Validator output consumed by Safety Governor scoring",
+  "type": "object",
+  "required": [
+    "event_id",
+    "tests_passed",
+    "tests_failed",
+    "coverage_before",
+    "coverage_after",
+    "visual_diff_pct",
+    "visual_regression",
+    "container_id",
+    "test_log_url",
+    "validation_status"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "tests_passed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tests_failed": {
+      "type": "integer",
+      "description": "Number of tests failed. Special sentinel values: -1 = infrastructure/timeout failure, -2 = patch apply failure"
+    },
+    "coverage_before": {
+      "type": "number"
+    },
+    "coverage_after": {
+      "type": "number"
+    },
+    "visual_diff_pct": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "visual_regression": {
+      "type": "boolean"
+    },
+    "container_id": {
+      "type": "string"
+    },
+    "test_log_url": {
+      "type": "string"
+    },
+    "screenshot_diff_url": {
+      "type": ["string", "null"]
+    },
+    "validation_status": {
+      "type": "string",
+      "enum": ["COMPLETED", "TIMEOUT", "CANNOT_PATCH", "INFRASTRUCTURE_FAILURE"]
+    }
+  },
+  "additionalProperties": false
+}

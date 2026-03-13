@@ -1,4 +1,5 @@
 const { Octokit } = require("@octokit/rest");
+const { withRetry } = require("../shared/retry");
 
 if (!process.env.JEST_WORKER_ID) {
   require("dotenv").config({ path: require("path").resolve(__dirname, "..", ".env") });
@@ -137,7 +138,10 @@ async function createDecisionIssue(telemetryClassification, historicalMatch, web
     issueParams.assignees = [SECURITY_TEAM_GITHUB_LOGIN];
   }
 
-  const { data: issue } = await octokit.rest.issues.create(issueParams);
+  const { data: issue } = await withRetry(
+    () => octokit.rest.issues.create(issueParams),
+    { label: "github-create-decision-issue" }
+  );
 
   return {
     issueNumber: issue.number,

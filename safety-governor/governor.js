@@ -7,6 +7,7 @@
  * Dev A owns computeScore() — for now we accept it as a parameter.
  */
 
+const telemetry = require("../shared/telemetry");
 const path = require("path");
 const router = require("./router");
 const prGenerator = require("./pr-generator");
@@ -43,14 +44,14 @@ function tierToOutcome(tier) {
  * @param {string|null} failureReason
  * @returns {object} historical_db_record.json conformant object
  */
-function buildHistoricalRecord(event, candidatePatch, tier, failureReason) {
+function buildHistoricalRecord(event, candidatePatch, tier, failureReason, structuredContext) {
   return {
     id: event.event_id,
     cve_id: event.cve_id,
     repo: event.repo,
     affected_package: event.affected_package,
     affected_version_range: event.current_version,
-    language: "java", // Inferred from context; Dev A may override
+    language: event.language || (structuredContext && structuredContext.language) || "unknown",
     framework: "unknown",
     fix_strategy_used: candidatePatch.source === "RAG_REPLAY" ? "RAG_REPLAY" : "LLM_GENERATED",
     patch_outcome: tierToOutcome(tier),
@@ -93,19 +94,17 @@ async function govern({
   const { tier, action, overrideReason } = router.route(
     compositeScore,
     validationBundle,
-    candidatePatch
+    candidatePatch,
+    structuredContext
   );
 
-  console.log(
-    JSON.stringify({
-      message: "Safety Governor routing decision",
-      eventId: event.event_id,
-      tier,
-      action,
-      compositeScore,
-      overrideReason,
-    })
-  );
+  telemetry.trackEvent("safety-governor-routing-decision", {
+    eventId: event.event_id,
+    tier,
+    action,
+    compositeScore: String(compositeScore),
+    overrideReason: overrideReason || "none",
+  });
 
   let prUrl = null;
   let issueUrl = null;
@@ -165,7 +164,8 @@ async function govern({
     event,
     candidatePatch,
     tier,
-    failureReason
+    failureReason,
+    structuredContext
   );
   await historicalDb.writeResolutionRecord(historicalRecord);
 

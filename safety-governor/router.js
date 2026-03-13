@@ -31,9 +31,10 @@
  * @param {number} compositeScore - Composite confidence score (0–1)
  * @param {object} validationBundle - validation_bundle.json
  * @param {object} candidatePatch - candidate_patch.json
+ * @param {object} [structuredContext] - structured_context.json (optional, for fix_strategy check)
  * @returns {RouteResult}
  */
-function route(compositeScore, validationBundle, candidatePatch) {
+function route(compositeScore, validationBundle, candidatePatch, structuredContext) {
   // Start with score-based tier
   let tier;
   let action;
@@ -59,14 +60,22 @@ function route(compositeScore, validationBundle, candidatePatch) {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Patch generator returned CANNOT_PATCH";
-  } else if (validationBundle.tests_failed === -1) {
+  } else if (validationBundle.validation_status === "TIMEOUT") {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Infrastructure failure: sandbox workflow timed out";
-  } else if (validationBundle.tests_failed === -2) {
+  } else if (validationBundle.validation_status === "CANNOT_PATCH" || validationBundle.validation_status === "INFRASTRUCTURE_FAILURE") {
     tier = "BLOCKED";
     action = "ARCHIVE";
     overrideReason = "Patch apply failure: git apply failed in sandbox";
+  } else if (validationBundle.tests_failed === -1) {
+    tier = "BLOCKED";
+    action = "ARCHIVE";
+    overrideReason = "Infrastructure failure: sandbox returned tests_failed=-1";
+  } else if (validationBundle.tests_failed === -2) {
+    tier = "BLOCKED";
+    action = "ARCHIVE";
+    overrideReason = "Patch apply failure: sandbox returned tests_failed=-2";
   }
 
   // LOW override (only if not already BLOCKED)
@@ -84,7 +93,7 @@ function route(compositeScore, validationBundle, candidatePatch) {
       tier = "MEDIUM";
       action = "REVIEW_PR";
       overrideReason = "Visual regression detected — forced to MEDIUM for human review";
-    } else if (candidatePatch.fix_strategy === "FULL_REFACTOR") {
+    } else if ((structuredContext && structuredContext.fix_strategy === "FULL_REFACTOR") || candidatePatch.fix_strategy === "FULL_REFACTOR") {
       tier = "MEDIUM";
       action = "REVIEW_PR";
       overrideReason = "Fix strategy is FULL_REFACTOR — forced to MEDIUM for human review";

@@ -34,7 +34,7 @@ class PromptBuilder:
         section_1 = self._section_1_system_prompt()
         section_2 = self._section_2_context(structured_context)
         section_3 = self._section_3_reasoning()
-        section_4 = self._section_4_output_constraints()
+        section_4 = self._section_4_output_constraints(structured_context)
         
         prompt = f"{section_1}\n\n{section_2}\n\n{section_3}\n\n{section_4}"
         
@@ -129,15 +129,15 @@ IMPORTANT: Do not use any of the solutions listed above. They are known to cause
 Before generating the patch, reason through the following questions inside <reasoning> tags:
 
 <reasoning>
-1. Minimal Change: Is this the absolute minimum change needed to remediate the vulnerability without extra modifications?
+1. What is the root cause of this vulnerability?
 
-2. Breaking Changes: Will this patch introduce breaking changes listed above? How are they mitigated?
+2. What is the minimal change that eliminates it?
 
-3. Testing Coverage: What tests would validate this patch? Are there edge cases?
+3. Could this change break existing behaviour?
 
-4. Authentication/Crypto: Does this patch modify auth or crypto code? Is it necessary? Are there safer alternatives?
+4. Are there alternative approaches and why is this one preferred?
 
-5. Constraint Satisfaction: Do all constraints listed in the System Prompt hold true for this patch?
+5. Does this patch avoid all strategies in solutions_to_avoid?
 
 Answer each question briefly, then decide: Can this patch be generated safely?
 </reasoning>
@@ -146,11 +146,25 @@ OUTPUT YOUR REASONING ANSWERS INSIDE THE <reasoning></reasoning> TAGS ABOVE.
 """
     
     @staticmethod
-    def _section_4_output_constraints() -> str:
+    def _section_4_output_constraints(structured_context: dict[str, Any]) -> str:
         """
-        Section 4: Hard output constraints.
+        Section 4: Hard output constraints including solutions_to_avoid.
         """
-        return """# OUTPUT CONSTRAINTS
+        solutions_to_avoid = structured_context.get("solutions_to_avoid", [])
+        if solutions_to_avoid:
+            avoid_lines = []
+            for sol in solutions_to_avoid:
+                if isinstance(sol, dict):
+                    strategy = sol.get("strategy", str(sol))
+                    reason = sol.get("failure_reason", "")
+                    avoid_lines.append(f"  - {strategy}" + (f" (reason: {reason})" if reason else ""))
+                else:
+                    avoid_lines.append(f"  - {sol}")
+            avoid_str = "\n".join(avoid_lines)
+        else:
+            avoid_str = "  None"
+
+        return f"""# OUTPUT CONSTRAINTS
 
 After your </reasoning> block:
 
@@ -163,6 +177,12 @@ After your </reasoning> block:
    - Start with: --- a/path/to/file.ext
    - Continue with: +++ b/path/to/file.ext
    - Show full context blocks with @@ -line,count +line,count @@
+
+## HARD CONSTRAINTS — Solutions to AVOID (MUST NOT use these approaches):
+{avoid_str}
+
+Any patch that uses a strategy listed above MUST be rejected. If no safe
+alternative exists, output CANNOT_PATCH.
 
 PROCEED WITH PATCH GENERATION.
 """
