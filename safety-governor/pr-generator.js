@@ -9,6 +9,7 @@
 
 const { Octokit } = require("@octokit/rest");
 const { withRetry } = require("../shared/retry");
+const telemetry = require("../shared/telemetry");
 require("dotenv").config();
 
 /**
@@ -151,12 +152,7 @@ async function createPR(candidatePatch, validationBundle, compositeScore, tier) 
       `, { pullRequestId: pr.node_id });
     } catch {
       // Auto-merge may not be available if branch protection doesn't allow it
-      console.log(
-        JSON.stringify({
-          message: "Auto-merge not enabled (branch protection may not allow)",
-          prNumber: pr.number,
-        })
-      );
+      telemetry.logWarning("Auto-merge not enabled (branch protection may not allow)", { prNumber: pr.number });
     }
   }
 

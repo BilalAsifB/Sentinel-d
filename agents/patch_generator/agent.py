@@ -57,6 +57,14 @@ class PatchGeneratorAgent:
         try:
             logger.info(f"Starting patch generation for event {event_id}")
             
+            # Step 0: Check for CANNOT_PATCH before calling Foundry
+            touches_auth_crypto = structured_context.get("touches_auth_crypto", False)
+            if touches_auth_crypto:
+                logger.warning(f"CANNOT_PATCH: touches_auth_crypto=true for {event_id}")
+                return self._build_cannot_patch_output(
+                    event_id, "Patch touches authentication/cryptographic code — requires human review"
+                )
+            
             # Step 1: Build prompt
             prompt = self.prompt_builder.build(structured_context)
             
@@ -109,7 +117,7 @@ class PatchGeneratorAgent:
     
     async def _call_foundry(self, prompt: str) -> str:
         """
-        Call Microsoft Foundry (Azure OpenAI) via aiohttp.
+        Call Microsoft Foundry (Azure OpenAI) via aiohttp with retry.
         
         Args:
             prompt: Complete four-section prompt.
@@ -117,46 +125,48 @@ class PatchGeneratorAgent:
         Returns:
             Response text from the model.
         """
-        url = (
-            f"{self.foundry_endpoint}/openai/deployments/{self.model_deployment}"
-            f"/chat/completions?api-version={self.foundry_api_version}"
-        )
-        
-        headers = {
-            "api-key": self.foundry_api_key,
-            "Content-Type": "application/json",
-        }
-        
-        payload = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt,
-                }
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.2,  # Low temperature for consistency
-            "top_p": 0.95,
-        }
-        
-        try:
+        import sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+        from shared.retry import with_retry
+
+        async def _do_request() -> str:
+            url = (
+                f"{self.foundry_endpoint}/openai/deployments/{self.model_deployment}"
+                f"/chat/completions?api-version={self.foundry_api_version}"
+            )
+            
+            headers = {
+                "api-key": self.foundry_api_key,
+                "Content-Type": "application/json",
+            }
+            
+            payload = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    }
+                ],
+                "max_tokens": 4096,
+                "temperature": 0.2,
+                "top_p": 0.95,
+            }
+            
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
                     if resp.status != 200:
                         error_text = await resp.text()
-                        raise Exception(f"Foundry API error: {resp.status} - {error_text}")
+                        error = Exception(f"Foundry API error: {resp.status} - {error_text}")
+                        error.status_code = resp.status
+                        raise error
                     
                     data = await resp.json()
                     response_text = data["choices"][0]["message"]["content"]
                     
                     logger.debug(f"Received response ({len(response_text)} chars)")
                     return response_text
-        
-        except asyncio.TimeoutError:
-            raise Exception("Foundry API request timeout")
-        except Exception as e:
-            logger.error(f"Foundry API call failed: {str(e)}")
-            raise
+
+        return await with_retry(_do_request, label="foundry-api", max_attempts=3)
     
     @staticmethod
     def _parse_response(response_text: str) -> tuple[str, str, Optional[str]]:
@@ -303,7 +313,7 @@ class PatchGeneratorAgent:
         }
 
 
-async def main():
+async def main() -> None:
     """Example usage."""
     agent = PatchGeneratorAgent()
     

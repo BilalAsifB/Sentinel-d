@@ -14,17 +14,23 @@ addFormats(ajv);
 const validate = ajv.compile(webhookSchema);
 
 // Mock Service Bus before requiring the handler
+const mockSendMessages = jest.fn().mockResolvedValue(undefined);
+const mockSenderClose = jest.fn().mockResolvedValue(undefined);
 jest.mock("@azure/service-bus", () => ({
   ServiceBusClient: jest.fn().mockImplementation(() => ({
     createSender: () => ({
-      sendMessages: jest.fn().mockResolvedValue(undefined),
-      close: jest.fn().mockResolvedValue(undefined),
+      sendMessages: mockSendMessages,
+      close: mockSenderClose,
     }),
-    close: jest.fn().mockResolvedValue(undefined),
   })),
 }));
 jest.mock("@azure/identity", () => ({
   DefaultAzureCredential: jest.fn(),
+}));
+
+// Mock retry with no delays for fast tests
+jest.mock("../shared/retry", () => ({
+  withRetry: jest.fn((fn) => fn()),
 }));
 
 process.env.SERVICE_BUS_NAMESPACE = "test-namespace";
@@ -160,5 +166,17 @@ describe("webhook-receiver HTTP handler", () => {
     const res = await handler(req, mockContext);
     expect(res.status).toBe(400);
     expect(res.jsonBody.error).toBe("Invalid Content-Type");
+  });
+
+  test("returns 503 when Service Bus send fails", async () => {
+    mockSendMessages.mockRejectedValueOnce(new Error("transient"));
+    const req = mockRequest({
+      headers: { "content-type": "application/json" },
+      body: validPayload,
+    });
+    const res = await handler(req, mockContext);
+    expect(res.status).toBe(503);
+    expect(res.jsonBody.error).toBe("SERVICE_UNAVAILABLE");
+    expect(res.jsonBody.detail).not.toContain("transient");
   });
 });

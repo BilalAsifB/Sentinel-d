@@ -13,6 +13,7 @@ function makeBundle(overrides = {}) {
     event_id: "evt-001",
     tests_passed: 42,
     tests_failed: 0,
+    validation_status: "COMPLETED",
     coverage_before: 0.85,
     coverage_after: 0.87,
     visual_diff_pct: 0.001,
@@ -118,15 +119,15 @@ describe("router override conditions", () => {
     expect(result.overrideReason).toMatch(/CANNOT_PATCH/);
   });
 
-  test("tests_failed === -1 overrides MEDIUM → BLOCKED", () => {
-    const result = route(0.75, makeBundle({ tests_failed: -1 }), makePatch());
+  test("validation_status TIMEOUT overrides MEDIUM → BLOCKED", () => {
+    const result = route(0.75, makeBundle({ tests_failed: 0, validation_status: "TIMEOUT" }), makePatch());
     expect(result.tier).toBe("BLOCKED");
     expect(result.action).toBe("ARCHIVE");
     expect(result.overrideReason).toMatch(/timed out/);
   });
 
-  test("tests_failed === -2 overrides to BLOCKED", () => {
-    const result = route(0.90, makeBundle({ tests_failed: -2 }), makePatch());
+  test("validation_status CANNOT_PATCH overrides to BLOCKED", () => {
+    const result = route(0.90, makeBundle({ tests_failed: 0, validation_status: "CANNOT_PATCH" }), makePatch());
     expect(result.tier).toBe("BLOCKED");
     expect(result.overrideReason).toMatch(/git apply/i);
   });

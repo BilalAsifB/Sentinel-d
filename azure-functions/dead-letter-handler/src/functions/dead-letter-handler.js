@@ -13,15 +13,17 @@ const { app } = require("@azure/functions");
 const { ServiceBusClient } = require("@azure/service-bus");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { Octokit } = require("@octokit/rest");
+const { withRetry } = require("../../../../shared/retry");
 
 /**
  * Process a batch of dead-letter messages.
  *
  * @param {object[]} messages - Dead-letter messages
  * @param {object} options - Environment config
+ * @param {object|null} context - Azure Functions invocation context for structured logging
  * @returns {Promise<{processed: number, issuesCreated: number}>}
  */
-async function processDeadLetters(messages, options = {}) {
+async function processDeadLetters(messages, options = {}, context = null) {
   const {
     githubToken = process.env.GITHUB_TOKEN,
     githubOwner = process.env.GITHUB_OWNER,
@@ -40,8 +42,11 @@ async function processDeadLetters(messages, options = {}) {
     const deadLetterDescription = msg.deadLetterErrorDescription || "";
     const enqueuedTime = msg.enqueuedTimeUtc || msg._rawAmqpMessage?.messageAnnotations?.["x-opt-enqueued-time"];
 
+    const log = context?.log ?? (() => {});
+    const logError = context?.error ?? (() => {});
+
     // Structured log for App Insights
-    console.log(
+    log(
       JSON.stringify({
         message: "Dead-letter message processed",
         messageId: msg.messageId,
@@ -69,11 +74,12 @@ async function processDeadLetters(messages, options = {}) {
           // Body might not be JSON
         }
 
-        await octokit.rest.issues.create({
-          owner: githubOwner,
-          repo: githubRepo,
-          title: `[Sentinel-D DLQ] Systemic failure: ${cveId} (${deliveryCount} attempts)`,
-          body: `## 🚨 Dead-Letter Queue — Systemic Failure
+        await withRetry(
+          () => octokit.rest.issues.create({
+            owner: githubOwner,
+            repo: githubRepo,
+            title: `[Sentinel-D DLQ] Systemic failure: ${cveId} (${deliveryCount} attempts)`,
+            body: `## 🚨 Dead-Letter Queue — Systemic Failure
 
 A message has failed processing **${deliveryCount} times** and was moved to the dead-letter queue.
 
@@ -99,12 +105,14 @@ ${body.substring(0, 1000)}
 
 **Action required:** Inspect the message, fix the root cause, and resubmit if appropriate.
 This message will NOT be automatically retried.`,
-          labels: ["sentinel/infrastructure-failure"],
-        });
+            labels: ["sentinel/infrastructure-failure"],
+          }),
+          { label: "github-create-dlq-issue" }
+        );
 
         issuesCreated++;
       } catch (err) {
-        console.error(
+        logError(
           JSON.stringify({
             message: "Failed to create DLQ GitHub Issue",
             error: err.message,
@@ -174,7 +182,7 @@ app.timer("dead-letter-handler", {
       }
 
       context.log(`Processing ${messages.length} dead-letter message(s)`);
-      const result = await processDeadLetters(messages);
+      const result = await processDeadLetters(messages, {}, context);
       context.log(
         `Processed ${result.processed} messages, created ${result.issuesCreated} issues`
       );

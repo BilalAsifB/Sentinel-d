@@ -5,11 +5,16 @@ Executes validated KQL queries against Azure Application Insights using the
 """
 
 import logging
+import os
+import sys
 from datetime import timedelta
 from typing import Any, Optional
 
 from azure.identity import DefaultAzureCredential
 from azure.monitor.query import LogsQueryClient, LogsQueryStatus
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.retry import with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +40,14 @@ async def query_telemetry(
         credential = DefaultAzureCredential()
         client = LogsQueryClient(credential)
 
-        result = client.query_workspace(
-            workspace_id=workspace_id,
-            query=kql_query,
-            timespan=timedelta(days=30),
-        )
+        async def _do_query() -> Any:
+            return client.query_workspace(
+                workspace_id=workspace_id,
+                query=kql_query,
+                timespan=timedelta(days=30),
+            )
+
+        result = await with_retry(_do_query, label="app-insights-query", max_attempts=3)
 
         if result.status in (LogsQueryStatus.SUCCESS, LogsQueryStatus.PARTIAL):
             tables = result.tables

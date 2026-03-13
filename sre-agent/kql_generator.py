@@ -98,6 +98,18 @@ def build_prompt(file_path: str, package_name: str) -> str:
     )
 
 
+def _escape_kql_string(value: str) -> str:
+    """Escape a value for safe inclusion in a KQL double-quoted string.
+
+    Args:
+        value: Raw string to escape.
+
+    Returns:
+        Escaped string safe for KQL interpolation.
+    """
+    return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', ' ').replace('\r', '')
+
+
 def build_fallback_kql(file_path: str, package_name: str) -> str:
     """Build a deterministic fallback KQL query when no AI endpoint is available.
 
@@ -108,12 +120,14 @@ def build_fallback_kql(file_path: str, package_name: str) -> str:
     Returns:
         A KQL query string.
     """
+    safe_file = _escape_kql_string(file_path)
+    safe_pkg = _escape_kql_string(package_name)
     return (
         f"traces\n"
         f"| where timestamp > ago(30d)\n"
-        f'| where message contains "{file_path}" or '
-        f'message contains "{package_name}" or '
-        f'customDimensions contains "{file_path}" or '
-        f'customDimensions contains "{package_name}"\n'
+        f'| where message contains "{safe_file}" or '
+        f'message contains "{safe_pkg}" or '
+        f'customDimensions contains "{safe_file}" or '
+        f'customDimensions contains "{safe_pkg}"\n'
         f"| summarize call_count = count(), last_called = max(timestamp)"
     )

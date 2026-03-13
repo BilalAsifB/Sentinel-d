@@ -5,6 +5,7 @@ const Ajv = require("ajv");
 const addFormats = require("ajv-formats");
 const path = require("path");
 const fs = require("fs");
+const { withRetry } = require("../../shared/retry");
 
 // Load webhook payload schema with graceful error handling
 let webhookSchema;
@@ -28,23 +29,30 @@ try {
 const SB_NAMESPACE = process.env.SERVICE_BUS_NAMESPACE;
 const SB_QUEUE = process.env.SERVICE_BUS_QUEUE_NAME || "vulnerability-events";
 
+// Singleton — reuse across requests
+let _sbClient;
+function getServiceBusClient() {
+  if (!_sbClient) {
+    _sbClient = new ServiceBusClient(
+      `${SB_NAMESPACE}.servicebus.windows.net`,
+      new DefaultAzureCredential()
+    );
+  }
+  return _sbClient;
+}
+
 /**
  * Send validated payload to Azure Service Bus queue.
  * Uses DefaultAzureCredential — no connection strings.
  */
 async function sendToServiceBus(payload) {
-  const credential = new DefaultAzureCredential();
-  const client = new ServiceBusClient(
-    `${SB_NAMESPACE}.servicebus.windows.net`,
-    credential
-  );
+  const client = getServiceBusClient();
   const sender = client.createSender(SB_QUEUE);
 
   try {
     await sender.sendMessages({ body: payload });
   } finally {
     await sender.close();
-    await client.close();
   }
 }
 
@@ -103,9 +111,9 @@ async function handler(request, context) {
     };
   }
 
-  // Send to Service Bus
+  // Send to Service Bus with retry
   try {
-    await sendToServiceBus(payload);
+    await withRetry(() => sendToServiceBus(payload));
     context.log(`Message sent to Service Bus: event_id=${payload.event_id}`);
     return {
       status: 202,
@@ -117,10 +125,10 @@ async function handler(request, context) {
   } catch (err) {
     context.error("Service Bus send failed:", err.message);
     return {
-      status: 400,
+      status: 503,
       jsonBody: {
-        error: "SERVICE_BUS_ERROR",
-        detail: err.message,
+        error: "SERVICE_UNAVAILABLE",
+        detail: "Unable to queue message for processing",
       },
     };
   }
@@ -133,4 +141,10 @@ app.http("webhook-receiver", {
 });
 
 // Export for testing
-module.exports = { validate, sendToServiceBus, handler };
+module.exports = {
+  validate,
+  sendToServiceBus,
+  handler,
+  getServiceBusClient,
+  _resetClient() { _sbClient = null; },
+};

@@ -188,7 +188,8 @@ function logResponseTime(eventId, elapsedMs, error, isMock) {
   if (error) logEntry.error = error;
 
   // Structured log for App Insights consumption
-  console.log(JSON.stringify(logEntry));
+  const telemetry = require("../shared/telemetry");
+  telemetry.trackEvent("PatchGeneration", logEntry);
 }
 
 // CLI entry point

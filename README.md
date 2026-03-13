@@ -1,153 +1,187 @@
-# Sentinel-D: Autonomous DevSecOps Pipeline
+# Sentinel-D: Autonomous Vulnerability Remediation Pipeline
 
-Sentinel-D is an autonomous DevSecOps pipeline that automatically detects, validates, and remediates security vulnerabilities in code repositories.
+Sentinel-D is an end-to-end DevSecOps system that converts real GitHub Advanced Security (GHAS) alerts into validated remediation actions.
 
-## Message Flow
+It solves the operational gap between **detection** and **safe fix delivery** by combining telemetry-aware prioritization, ML-assisted patch generation, sandbox validation, and policy-based governance.
 
-```
-GHAS alert → Azure Function → Service Bus → SRE Agent → Human Decision Gate
-  → Historical DB lookup → NLP Pipeline (Dev A) → Patch Generator (Dev A)
-  → Sandbox Validator → Safety Governor → PR/Issue/Escalation
-  → Historical DB write
-```
+## What Sentinel-D Does
 
-## Architecture
+- Receives GHAS vulnerability alerts through Azure Functions.
+- Prioritizes alerts using production telemetry (`ACTIVE`, `DORMANT`, `DEFERRED`) with the SRE Agent.
+- Builds fix context using NVD + Stack Overflow + local ML models (spaCy NER, DistilBERT).
+- Generates candidate patches using Microsoft Foundry (Azure OpenAI) and replay paths for historical matches.
+- Validates patches in sandboxed execution with tests and SSIM visual checks.
+- Applies Safety Governor policy to create PRs, escalate to issues, or archive.
+- Writes historical outcomes to Cosmos DB for faster, better future handling.
 
-### Dev B Components (Infrastructure & Integration)
-- **Azure Functions**: Webhook receiver for GHAS alerts with schema validation
-- **SRE Agent**: KQL auto-generation, allowlist validation, telemetry classification (ACTIVE/DORMANT/DEFERRED)
-- **Sandbox Validator**: Ephemeral Container Apps, test runner, SSIM visual regression
-- **Safety Governor**: Four-tier action dispatch (Auto PR / Manual PR / Escalate / Reject)
-- **Historical DB**: Cosmos DB write client, Azure AI Search indexing
+## Core Features
 
-### Dev A Components (ML/NLP Pipeline & Intelligence)
-- **NLP Context Orchestrator**: Parallel async fetchers for NVD 2.0 and Stack Exchange APIs to assemble structured vulnerability context.
-- **Machine Learning Models**: Fine-tuned spaCy NER (entity extraction for breaking changes/APIs) and DistilBERT (community fix intent classification).
-  - *spaCy NER Model*: [Hugging Face Repository](https://huggingface.co/mojad121/spacy-classes-finetune/tree/main)
-  - *DistilBERT Intent Classifier*: [Hugging Face Repository](https://huggingface.co/mojad121/distill-bert-intent-classifer/tree/main)
-- **Patch Generator Agent**: Azure OpenAI (Foundry) integration utilizing a heavily constrained, four-section chain-of-thought prompt architecture.
-- **Confidence Scorer**: Composite evaluation mathematical formula weighing LLM log probabilities, constraint adherence, and NLP intent alignment.
-- **Historical DB (Read Path)**: Two-stage asynchronous lookup engine (Cosmos DB exact match + Azure AI Search semantic vector search) and text embedding generation.
+- **Schema-driven contracts** across stages (`shared/schemas/*.json`).
+- **Telemetry-driven triage** before expensive remediation work.
+- **LLM-assisted patching** with confidence scoring and hard safety constraints.
+- **Human decision gate** labels (`sentinel/fix-now`, `sentinel/defer`, `sentinel/wont-fix`).
+- **Auditability** via append-only records and historical resolution storage.
 
-### Shared Components
-- **Historical DB**: Read client (Dev A), Write client (Dev B)
-- **JSON Schemas**: Frozen interface contracts in `/shared/schemas/`
+## High-Level Flow
 
-## Repository Structure
-
-```
-/shared/schemas/          # FROZEN - Interface contracts between Dev A and Dev B
-/sre-agent/              # Dev B - Telemetry analysis and classification
-/azure-functions/        # Dev B - Webhook receiver
-/sandbox-validator/      # Dev B - Container App orchestration, SSIM visual regression
-/safety-governor/        # Dev B - Action dispatch routing (Dev A owns scoring math)
-/historical-db/          # Shared - Dev B owns write path, Dev A owns read path
-/nlp-pipeline/           # Dev A - spaCy + DistilBERT pipeline
-/patch-generator/        # Dev A - Patch generation and scoring
-/demo/                   # Shared - Demo app with GHAS + App Insights
+```text
+GHAS Alert
+  -> Azure Function (webhook receiver)
+  -> Service Bus (vulnerability-events)
+  -> SRE Agent (KQL + App Insights -> ACTIVE/DORMANT/DEFERRED)
+  -> NLP Pipeline (historical lookup + NVD/SO + ML intent)
+  -> Patch Generator (Foundry / replay)
+  -> Sandbox Validator (tests + SSIM)
+  -> Safety Governor (AUTO_PR / REVIEW_PR / ESCALATE / ARCHIVE)
+  -> Historical DB write (Cosmos DB)
 ```
 
-## Tech Stack
+## Architecture Diagram
 
-### Dev B Stack
-- **Node.js**: Azure Functions, Service Bus consumers, GitHub Actions
-- **Python**: SRE Agent, Sandbox Validator (scikit-image for SSIM)
-- **Azure Services**: Functions, Service Bus, Container Apps, Cosmos DB, AI Search, Table Storage, Logic Apps, Application Insights
-- **GitHub**: Issues, Labels, PR generation via Copilot Agent Mode
-- **Puppeteer**: Visual regression screenshots
-- **scikit-image**: SSIM computation
-- **PIL**: Diff overlay generation
+```mermaid
+flowchart LR
+  GHAS[GitHub Advanced Security Alert] --> AF[Azure Function<br/>webhook-receiver]
+  AF --> SB[Azure Service Bus<br/>vulnerability-events]
+  SB --> SRE[SRE Agent<br/>KQL generation + validation + telemetry classification]
+  SRE -->|ACTIVE| NLP[NLP Pipeline<br/>historical lookup + NVD/SO + spaCy/DistilBERT]
+  SRE -->|DORMANT/DEFERRED| HDG[Human Decision Gate<br/>GitHub Issues + labels]
+  NLP --> PG[Patch Generator Agent]
+  PG --> MF[Microsoft Foundry<br/>Azure OpenAI]
+  PG --> SV[Sandbox Validator<br/>GitHub Actions + Container Apps + SSIM]
+  SV --> SG[Safety Governor Agent]
+  SG -->|AUTO_PR/REVIEW_PR| PR[GitHub Pull Request]
+  SG -->|ESCALATE| GI[GitHub Escalation Issue]
+  SG --> HDB[(Azure Cosmos DB<br/>Historical Records)]
+  SG --> AUD[(Azure Table Storage<br/>Audit Log / Deferred Backlog)]
+  COP[GitHub Copilot<br/>dev/ops workflow support] -. assists code, tests, and runbooks .- SRE
+  COP -. assists code, tests, and runbooks .- NLP
+  COP -. assists code, tests, and runbooks .- PG
+  COP -. assists code, tests, and runbooks .- SG
+```
 
-### Dev A Stack
-- **Python**: spaCy, DistilBERT, PyTorch
-- **Azure ML**: Managed endpoints for NLP pipeline
-- **Azure AI**: FOUNDRY for patch generation
+## Updated Repository Structure
 
-## Critical Rules
+```text
+azure-functions/
+  webhook-receiver/        # GHAS webhook -> schema validate -> Service Bus
+  dead-letter-handler/     # Reprocess dead-lettered queue messages
 
-1. **KQL queries must pass allowlist validation** before execution
-   - Allowed tables: `traces`, `requests`, `exceptions`, `dependencies`
-   - Blocked operators: `externaldata`, `http_request`, `invoke`
+sre-agent/                 # Telemetry triage (KQL, validation, classification, routing)
+nlp-pipeline/              # Historical lookup, fetchers, NER + intent classification
+patch-generator/           # Foundry clients/wrappers + patch generation tests
+sandbox-validator/         # Sandbox workflow orchestration + SSIM tooling
+safety-governor/           # Policy router, PR creation, escalation, human handlers
+historical-db/             # Cosmos/Table clients (write path + deferred backlog)
+shared/                    # Shared retry utilities + frozen JSON schemas
 
-2. **Historical DB write happens AFTER Safety Governor resolution** - never before
+infrastructure/            # Logic Apps + provisioning scripts
+scripts/                   # Integration/stress scripts
+demo/                      # Vulnerable demo app for live pipeline tests
+docs/                      # Supporting docs and test artifacts
+agents/patch_generator/    # Canonical Python patch-generation agent modules
+```
 
-3. **Container Apps must tear down** after every sandbox run (no persistent compute cost)
+## Technology Stack
 
-4. **SSIM threshold must produce < 5% false positive rate**
+- **Languages:** Python, Node.js
+- **AI/ML:** Microsoft Foundry (Azure OpenAI), spaCy, DistilBERT, PyTorch
+- **Azure Services:** Functions, Service Bus, Application Insights, Container Apps Jobs, Cosmos DB, Table Storage, Logic Apps
+- **GitHub Platform:** GHAS, Actions, Issues, Pull Requests, Labels
+- **Validation Tooling:** Puppeteer, scikit-image (SSIM), pytest, Jest
 
-5. **Audit log is append-only** (Azure Table Storage) - no updates, no deletes
-
-6. **`sentinel/wont-fix` label writes ACCEPTED_RISK record** to Cosmos DB
-
-## Getting Started
+## Setup (Corrected)
 
 ### Prerequisites
-- Azure subscription with required services
-- GitHub repository with GHAS enabled
-- Node.js 18+ and Python 3.11+
 
-### Installation
+- Node.js 20+
+- Python 3.11+
+- Azure CLI and authenticated Azure session
+- GitHub CLI (`gh`) authenticated
+- Azure Functions Core Tools (for local Function app runs)
+
+### 1) Clone
 
 ```bash
-# Install dependencies for each component
-cd azure-functions && pip install -r requirements.txt
-cd ../sre-agent && pip install -r requirements.txt
-cd ../sandbox-validator && pip install -r requirements.txt
-cd ../safety-governor && pip install -r requirements.txt
-cd ../historical-db && pip install -r requirements.txt
+git clone https://github.com/BilalAsifB/Sentinel-d.git
+cd Sentinel-d
 ```
 
-### Configuration
-
-Copy `.env.example` to `.env` and configure:
+### 2) Python environment
 
 ```bash
-# Azure credentials
-AZURE_SUBSCRIPTION_ID=
-SERVICE_BUS_NAMESPACE=
-APP_INSIGHTS_WORKSPACE_ID=
-COSMOS_DB_ENDPOINT=
-AZURE_SEARCH_ENDPOINT=
-
-# GitHub
-GITHUB_TOKEN=
-GITHUB_REPOSITORY=
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pip install -r sre-agent/requirements.txt
+pip install -r sandbox-validator/requirements.txt
 ```
 
-### Deployment
+### 3) Node dependencies (component-level)
 
 ```bash
-# Deploy Azure Functions
-az functionapp deploy --resource-group sentinel --name sentinel-webhook-receiver --src-path azure-functions
-
-# Provision Cosmos DB
-python historical-db/write_client.py provision_cosmos_db
-
-# Provision Azure AI Search
-python historical-db/write_client.py provision_azure_search
+cd azure-functions/webhook-receiver && npm ci && cd ../..
+cd azure-functions/dead-letter-handler && npm ci && cd ../..
+cd historical-db && npm ci && cd ..
+cd safety-governor && npm ci && cd ..
+cd patch-generator && npm ci && cd ..
+cd sandbox-validator && npm ci && cd ..
+cd shared && npm ci && cd ..
 ```
 
-## Testing
+### 4) Environment configuration
+
+Configure environment variables (for local execution and cloud auth), including:
+
+- `SERVICE_BUS_NAMESPACE`
+- `SERVICE_BUS_QUEUE_NAME`
+- `APP_INSIGHTS_WORKSPACE_ID`
+- `COSMOS_DB_ENDPOINT` (or `COSMOS_ENDPOINT`)
+- `COSMOS_DB_DATABASE` / `COSMOS_DB_CONTAINER`
+- `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`
+- `AZURE_OPENAI_ENDPOINT` / `FOUNDRY_ENDPOINT`
+- `AZURE_OPENAI_API_KEY` (or AAD credentials)
+
+## Test Commands (Current)
 
 ```bash
-# Run SRE Agent tests
-cd sre-agent && pytest test_agent.py
+# Webhook receiver
+cd azure-functions/webhook-receiver && npm test
 
-# Run Sandbox Validator tests
-cd sandbox-validator && pytest
+# Dead-letter handler
+cd azure-functions/dead-letter-handler && npm test
 
-# Run Safety Governor tests
-cd safety-governor && pytest
+# SRE Agent
+cd sre-agent && python3 -m pytest tests/ -v
+
+# Patch Generator
+cd patch-generator && npm test
+
+# Sandbox Validator
+cd sandbox-validator && npm test
+cd sandbox-validator && python3 -m pytest tests/ -v
+
+# Safety Governor
+cd safety-governor && npm test
+
+# Historical DB
+cd historical-db && npm test
+
+# Shared utilities
+cd shared && npm test
 ```
 
 ## Interface Contracts
 
-The interface between Dev A and Dev B is defined by JSON schemas in `/shared/schemas/`:
+The stage interfaces are defined in `shared/schemas/` and are treated as frozen contracts:
 
-- **Dev A delivers**: `structured_context.json` (from NLP Pipeline)
-- **Dev B delivers**: `validation_bundle.json` (from Sandbox Validator)
-
-**These schemas are FROZEN** - changes require joint agreement.
+- `webhook_payload.json`
+- `telemetry_classification.json`
+- `structured_context.json`
+- `candidate_patch.json`
+- `validation_bundle.json`
+- `historical_match.json`
+- `historical_db_record.json`
+- `human_decision.json`
 
 ## License
 

@@ -23,6 +23,7 @@
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const telemetry = require("../shared/telemetry");
 
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN;
 const GITHUB_OWNER = process.env.GITHUB_OWNER;
@@ -160,18 +161,24 @@ function runSSIM(eventId) {
     const currentPath = `/tmp/current-${route.slug}-${eventId}.png`;
 
     if (!fs.existsSync(baselinePath) || !fs.existsSync(currentPath)) {
-      console.log(`Skipping SSIM for ${route.slug}: missing screenshot(s)`);
+      telemetry.logInfo(`Skipping SSIM for ${route.slug}: missing screenshot(s)`);
       continue;
     }
 
     const ssimScript = path.join(__dirname, "ssim.py");
+    const ssimArgs = JSON.stringify({
+      baseline: baselinePath,
+      current: currentPath,
+      event_id: `${eventId}-${route.slug}`,
+    });
     const cmd = `python3 -c "
 import json, sys
-sys.path.insert(0, '${__dirname}')
+sys.path.insert(0, '${__dirname.replace(/'/g, "\\'")}')
 from ssim import compute_ssim
-result = compute_ssim('${baselinePath}', '${currentPath}', '${eventId}-${route.slug}')
+args = json.loads(sys.argv[1])
+result = compute_ssim(args['baseline'], args['current'], args['event_id'])
 print(json.dumps(result))
-"`;
+" '${ssimArgs.replace(/'/g, "\\'")}'`;
 
     try {
       const output = execSync(cmd, { encoding: "utf8", timeout: 60_000 });
@@ -188,7 +195,7 @@ print(json.dumps(result))
         anyRegression = true;
       }
     } catch (err) {
-      console.error(`SSIM failed for ${route.slug}: ${err.message}`);
+      console.error(JSON.stringify({ level: "error", message: `SSIM failed for ${route.slug}`, error: err.message }));
     }
   }
 
@@ -212,6 +219,7 @@ async function validate(candidatePatch) {
   // CANNOT_PATCH: short-circuit with failure sentinel
   if (status === "CANNOT_PATCH") {
     return buildBundle(event_id, {
+      validation_status: "CANNOT_PATCH",
       tests_passed: 0,
       tests_failed: -2,
       coverage_before: 0,
@@ -229,17 +237,18 @@ async function validate(candidatePatch) {
 
   try {
     // Step 1: Trigger sandbox workflow
-    console.log(`Triggering sandbox workflow for event ${event_id}...`);
+    telemetry.logInfo("Triggering sandbox workflow", { event_id });
     await triggerWorkflow(event_id, diff);
 
     // Step 2: Poll for completion
-    console.log("Polling for workflow completion (max 15 min)...");
+    telemetry.logInfo("Polling for workflow completion (max 15 min)", { event_id });
     workflowRun = await pollWorkflowCompletion(event_id);
 
     if (!workflowRun) {
       // Workflow timeout
-      console.error("Workflow timed out");
+      telemetry.logError("Workflow timed out", { event_id });
       return buildBundle(event_id, {
+        validation_status: "TIMEOUT",
         tests_passed: 0,
         tests_failed: -1,
         coverage_before: 0,
@@ -253,11 +262,12 @@ async function validate(candidatePatch) {
     }
 
     // Step 3: Download test results
-    console.log(`Workflow completed: ${workflowRun.conclusion}`);
+    telemetry.logInfo("Workflow completed", { event_id, conclusion: workflowRun.conclusion });
     testResults = await downloadTestResults(workflowRun.id);
   } catch (err) {
-    console.error(`Sandbox execution failed: ${err.message}`);
+    telemetry.logError("Sandbox execution failed", { event_id, error: err.message });
     return buildBundle(event_id, {
+      validation_status: "INFRASTRUCTURE_FAILURE",
       tests_passed: 0,
       tests_failed: -2,
       coverage_before: 0,
@@ -271,7 +281,7 @@ async function validate(candidatePatch) {
   }
 
   // Step 4: Run SSIM comparison
-  console.log("Running SSIM visual regression analysis...");
+  telemetry.logInfo("Running SSIM visual regression analysis", { event_id });
   const ssimResults = runSSIM(event_id);
 
   // Step 5: Assemble validation bundle
@@ -281,6 +291,7 @@ async function validate(candidatePatch) {
   const coverageAfter = testResults?.coverage_after ?? 0;
 
   return buildBundle(event_id, {
+    validation_status: "COMPLETED",
     tests_passed: testsPassed,
     tests_failed: testsFailed,
     coverage_before: coverageBefore,
@@ -304,6 +315,7 @@ function buildBundle(eventId, fields) {
     event_id: eventId,
     tests_passed: fields.tests_passed,
     tests_failed: fields.tests_failed,
+    validation_status: fields.validation_status,
     coverage_before: fields.coverage_before,
     coverage_after: fields.coverage_after,
     visual_diff_pct: fields.visual_diff_pct,
