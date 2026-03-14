@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_FUNCTIONAPP_NAME: sentinel-webhook-receiver
+  AZURE_FUNCTIONAPP_NAME: sentinel-d-functions 
   AZURE_FUNCTIONAPP_PACKAGE_PATH: 'azure-functions/webhook-receiver'
   NODE_VERSION: '20'
 
