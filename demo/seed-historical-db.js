@@ -15,9 +15,9 @@
  *   node seed-historical-db.js --cleanup    (delete seeded record)
  *
  * Env vars (for live mode):
- *   COSMOS_DB_ENDPOINT    — Cosmos DB account endpoint URL
- *   COSMOS_DB_DATABASE    — Database name (default: "sentinel")
- *   COSMOS_DB_CONTAINER   — Container name (default: "historical_records")
+ *   COSMOS_ENDPOINT       — Cosmos DB account endpoint URL
+ *   COSMOS_DB_NAME        — Database name (default: "sentinel")
+ *   COSMOS_CONTAINER_NAME — Container name (default: "historical_records")
  */
 
 const path = require("path");
