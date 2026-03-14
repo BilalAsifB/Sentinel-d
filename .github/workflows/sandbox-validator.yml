@@ -41,11 +41,31 @@ jobs:
           ref: HEAD
 
       - name: Apply candidate patch
+        id: apply_patch
         env:
           PATCH_B64: ${{ github.event.inputs.patch_diff_b64 }}
         run: |
-          echo "$PATCH_B64" | base64 -d | git apply
-          echo "Patch applied successfully."
+          echo "$PATCH_B64" | base64 -d > candidate.patch
+          if git apply --check candidate.patch 2>&1; then
+            git apply candidate.patch
+            echo "patch_status=ok" >> $GITHUB_OUTPUT
+            echo "Patch applied successfully."
+          else
+            echo "patch_status=failed" >> $GITHUB_OUTPUT
+            echo "::error title=Patch Apply Failure::git apply --check rejected the patch"
+            # Write sentinel test_results.json so later steps produce a valid bundle
+            cat > test_results.json <<EOF
+          {
+            "event_id": "${{ github.event.inputs.event_id }}",
+            "exit_code": 128,
+            "tests_passed": -2,
+            "tests_failed": 0,
+            "coverage_before": 0.0,
+            "coverage_after": 0.0,
+            "container_status": "patch_apply_failure"
+          }
+          EOF
+          fi
 
       - name: Azure Login
         uses: azure/login@v2
@@ -60,10 +80,10 @@ jobs:
         run: |
           if [ "$LANGUAGE" = "python" ]; then
             echo "image=python:3.11-slim" >> $GITHUB_OUTPUT
-            echo "test_command=python -m pytest --tb=short -q --json-report --json-report-file=test_results.json" >> $GITHUB_OUTPUT
+            echo "test_command=pip install -r requirements.txt -q && python -m pytest --tb=short -q --json-report --json-report-file=test_results.json --cov=. --cov-report=json:coverage.json 2>&1 | tee container_output.log; exit \${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
           else
             echo "image=node:20-alpine" >> $GITHUB_OUTPUT
-            echo "test_command=npm test -- --json --outputFile=test_results.json" >> $GITHUB_OUTPUT
+            echo "test_command=npm ci --silent && npm test -- --json --outputFile=test_results.json --coverage 2>&1 | tee container_output.log; exit \${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
           fi
 
       # ── Benchmark: start timer ───────────────────────────────────────────────
@@ -74,6 +94,7 @@ jobs:
       # ── Create ephemeral Container App Job ──────────────────────────────────
       - name: Create Container App Job
         id: create_job
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         run: |
           az containerapp job create \
             --name "${{ env.JOB_NAME }}" \
@@ -89,13 +110,13 @@ jobs:
             --memory 1.0Gi \
             --env-vars \
               "EVENT_ID=${{ github.event.inputs.event_id }}" \
-              "TEST_COMMAND=${{ steps.image.outputs.test_command }}" \
-            --command "/bin/sh" "-c" "cd /workspace && ${{ steps.image.outputs.test_command }} || true"
+            --command "/bin/sh" "-c" "${{ steps.image.outputs.test_command }}"
           echo "job_created=true" >> $GITHUB_OUTPUT
 
       # ── Start the job and wait for completion ───────────────────────────────
       - name: Start and wait for Container App Job
         id: run_job
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         run: |
           EXECUTION_NAME=$(az containerapp job start \
             --name "${{ env.JOB_NAME }}" \
@@ -118,67 +139,113 @@ jobs:
             sleep 10
           done
 
-      # ── Capture exit code and write test_results.json ───────────────────────
+          # If we exhausted all polls without a terminal status, it's a timeout
+          if [ -z "$(grep 'final_status' $GITHUB_OUTPUT 2>/dev/null)" ]; then
+            echo "final_status=Timeout" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Capture exit code and write raw container log ───────────────────────
       - name: Extract container logs
         id: logs
-        if: steps.run_job.outputs.final_status != ''
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         run: |
-          # Pull stdout/stderr from the container execution
           az containerapp job execution logs show \
             --name "${{ env.JOB_NAME }}" \
             --resource-group "${{ env.AZURE_RESOURCE_GROUP }}" \
             --job-execution-name "${{ steps.run_job.outputs.execution_name }}" \
             --format text > container_output.log 2>/dev/null || true
-          cat container_output.log
+          echo "--- container_output.log (last 100 lines) ---"
+          tail -100 container_output.log
 
-      - name: Write test results JSON
-        id: results
-        run: |
-          FINAL_STATUS="${{ steps.run_job.outputs.final_status }}"
-          EXIT_CODE=0
-          if [ "$FINAL_STATUS" = "Failed" ]; then EXIT_CODE=1; fi
-
-          # TODO: Parse real test counts from container_output.log once
-          # the test runner output format is finalized. For now, the
-          # fallback JSON captures container-level pass/fail status.
-          if [ ! -f test_results.json ]; then
-            cat > test_results.json <<EOF
-          {
-            "event_id": "${{ github.event.inputs.event_id }}",
-            "exit_code": $EXIT_CODE,
-            "tests_passed": 0,
-            "tests_failed": 0,
-            "container_status": "$FINAL_STATUS",
-            "container_log": "container_output.log"
-          }
-          EOF
+          # Derive exit_code from container final status
+          FINAL="${{ steps.run_job.outputs.final_status }}"
+          if   [ "$FINAL" = "Succeeded" ]; then echo "container_exit_code=0"   >> $GITHUB_OUTPUT
+          elif [ "$FINAL" = "Timeout" ];   then echo "container_exit_code=124" >> $GITHUB_OUTPUT
+          else                                   echo "container_exit_code=1"   >> $GITHUB_OUTPUT
           fi
 
-          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
-          cat test_results.json
+      # ── Parse real test counts from container_output.log ────────────────────
+      #
+      # Replaces the TODO block. Calls parse_test_results.py which:
+      #   1. Detects patch-apply failure  → tests_passed = -2  (sentinel)
+      #   2. Detects infrastructure error → tests_passed = -1  (sentinel)
+      #   3. Parses Jest --json block from log (JavaScript)
+      #   4. Parses Jest human-readable summary lines (fallback, JavaScript)
+      #   5. Parses pytest-json-report block from log (Python)
+      #   6. Parses pytest short summary line (fallback, Python)
+      #   7. Falls back to -1 sentinel if nothing is parseable
+      #
+      # Output: test_results.json with all fields expected by validate.js:
+      #   event_id, tests_passed, tests_failed, coverage_before,
+      #   coverage_after, container_status, exit_code
+      # ────────────────────────────────────────────────────────────────────────
+      - name: Parse test results from container log
+        id: results
+        if: always()
+        env:
+          EVENT_ID: ${{ github.event.inputs.event_id }}
+          LANGUAGE: ${{ github.event.inputs.language }}
+          PATCH_STATUS: ${{ steps.apply_patch.outputs.patch_status }}
+          CONTAINER_EXIT_CODE: ${{ steps.logs.outputs.container_exit_code || '0' }}
+        run: |
+          # Install parser dependency (skimage not needed here — pure stdlib)
+          pip install --quiet --disable-pip-version-check pillow 2>/dev/null || true
+
+          # If patch apply already wrote a sentinel result, skip parsing
+          if [ "$PATCH_STATUS" = "failed" ]; then
+            echo "Patch apply failed — using pre-written sentinel test_results.json"
+            cat test_results.json
+          else
+            # touch log file in case container step was skipped
+            touch container_output.log
+
+            python3 sandbox-validator/parse_test_results.py \
+              --log        container_output.log \
+              --exit-code  "$CONTAINER_EXIT_CODE" \
+              --language   "$LANGUAGE" \
+              --event-id   "$EVENT_ID" \
+              --out        test_results.json
+
+            echo "--- Parsed test_results.json ---"
+            cat test_results.json
+          fi
+
+          # Expose summary to GitHub Actions step summary
+          PASSED=$(python3 -c "import json,sys; d=json.load(open('test_results.json')); print(d['tests_passed'])")
+          FAILED=$(python3 -c "import json,sys; d=json.load(open('test_results.json')); print(d['tests_failed'])")
+          echo "### Sandbox Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Language     | $LANGUAGE |" >> $GITHUB_STEP_SUMMARY
 
       # ── Benchmark: log spin-up + run time ───────────────────────────────────
       - name: Log benchmark
+        if: always()
         run: |
           END_TS=$(date +%s)
           START_TS=${{ steps.timer.outputs.start_ts }}
           ELAPSED=$((END_TS - START_TS))
           echo "::notice title=Sandbox Benchmark::Spin-up to completion: ${ELAPSED}s"
           if [ "$ELAPSED" -gt 480 ]; then
-            echo "::warning title=Sandbox Slow::Elapsed ${ELAPSED}s exceeds 8-minute threshold — consider pre-warm logic"
+            echo "::warning title=Sandbox Slow::Elapsed ${ELAPSED}s exceeds 8-minute threshold"
           fi
 
       # ── Capture SSIM screenshots (post-patch) ───────────────────────────────
       - name: Setup Node.js for SSIM capture
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install sandbox-validator dependencies
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         run: |
           cd sandbox-validator && npm ci
 
       - name: Capture post-patch screenshots
+        if: steps.apply_patch.outputs.patch_status == 'ok'
         env:
           BASE_URL: ${{ secrets.DEMO_APP_BASE_URL }}
           SCREENSHOT_PREFIX: postpatch
