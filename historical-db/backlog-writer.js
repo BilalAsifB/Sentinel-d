@@ -1,12 +1,13 @@
 const { TableClient } = require("@azure/data-tables");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { withRetry } = require("../shared/retry");
+const telemetry = require("../shared/telemetry");
 
 require("dotenv").config();
 
 const logger = {
-  info: (data) => process.env.NODE_ENV !== "test" && console.log(JSON.stringify({ level: "info", ...data })),
-  error: (data) => console.error(JSON.stringify({ level: "error", ...data })),
+  info: (data) => process.env.NODE_ENV !== "test" && telemetry.logInfo(data.message || "info", data),
+  error: (data) => telemetry.logError(data.message || "error", data),
 };
 
 const TABLE_NAME = "deferredbacklog";
@@ -44,18 +45,22 @@ function getTableClient() {
  * Partition key: "deferred", Row key: eventId.
  * @param {string} eventId - The event ID from the webhook payload
  * @param {string} cveId - The CVE identifier
- * @param {string} deferralTimestamp - ISO 8601 timestamp of deferral
+ * @param {string} deferUntil - ISO 8601 timestamp when deferral expires
  * @param {string} annotation - Human annotation for the deferral
+ * @param {object} [originalPayload] - Original webhook payload for re-queuing
  */
-async function writeDeferred(eventId, cveId, deferralTimestamp, annotation) {
+async function writeDeferred(eventId, cveId, deferUntil, annotation, originalPayload) {
   const tableClient = getTableClient();
 
   const entity = {
     partitionKey: "deferred",
     rowKey: eventId,
     cveId,
-    deferralTimestamp,
+    defer_until: deferUntil,
+    deferralTimestamp: deferUntil,
+    original_payload: originalPayload ? JSON.stringify(originalPayload) : "",
     annotation,
+    deferred_at: new Date().toISOString(),
     createdAt: new Date().toISOString(),
   };
 

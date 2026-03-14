@@ -1,6 +1,7 @@
 const { CosmosClient } = require("@azure/cosmos");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { withRetry } = require("../shared/retry");
+const telemetry = require("../shared/telemetry");
 const Ajv = require("ajv");
 const addFormats = require("ajv-formats");
 const path = require("path");
@@ -9,8 +10,8 @@ const fs = require("fs");
 require("dotenv").config();
 
 const logger = {
-  info: (data) => process.env.NODE_ENV !== "test" && console.log(JSON.stringify({ level: "info", ...data })),
-  error: (data) => console.error(JSON.stringify({ level: "error", ...data })),
+  info: (data) => process.env.NODE_ENV !== "test" && telemetry.logInfo(data.message || "info", data),
+  error: (data) => telemetry.logError(data.message || "error", data),
 };
 
 // Singleton CosmosClient — lazy initialized

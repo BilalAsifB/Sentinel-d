@@ -13,6 +13,7 @@ const { app } = require("@azure/functions");
 const { ServiceBusClient } = require("@azure/service-bus");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { Octokit } = require("@octokit/rest");
+const { withRetry } = require("../../../../shared/retry");
 
 /**
  * Process a batch of dead-letter messages.
@@ -73,11 +74,12 @@ async function processDeadLetters(messages, options = {}, context = null) {
           // Body might not be JSON
         }
 
-        await octokit.rest.issues.create({
-          owner: githubOwner,
-          repo: githubRepo,
-          title: `[Sentinel-D DLQ] Systemic failure: ${cveId} (${deliveryCount} attempts)`,
-          body: `## 🚨 Dead-Letter Queue — Systemic Failure
+        await withRetry(
+          () => octokit.rest.issues.create({
+            owner: githubOwner,
+            repo: githubRepo,
+            title: `[Sentinel-D DLQ] Systemic failure: ${cveId} (${deliveryCount} attempts)`,
+            body: `## 🚨 Dead-Letter Queue — Systemic Failure
 
 A message has failed processing **${deliveryCount} times** and was moved to the dead-letter queue.
 
@@ -103,8 +105,10 @@ ${body.substring(0, 1000)}
 
 **Action required:** Inspect the message, fix the root cause, and resubmit if appropriate.
 This message will NOT be automatically retried.`,
-          labels: ["sentinel/infrastructure-failure"],
-        });
+            labels: ["sentinel/infrastructure-failure"],
+          }),
+          { label: "github-create-dlq-issue" }
+        );
 
         issuesCreated++;
       } catch (err) {

@@ -26,7 +26,7 @@
     },
     "tests_failed": {
       "type": "integer",
-      "minimum": 0
+      "description": "Number of tests failed. Special sentinel values: -1 = infrastructure/timeout failure, -2 = patch apply failure"
     },
     "coverage_before": {
       "type": "number"

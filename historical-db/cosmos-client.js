@@ -15,6 +15,7 @@
 const { CosmosClient } = require("@azure/cosmos");
 const { DefaultAzureCredential } = require("@azure/identity");
 const { writeResolutionRecord } = require("./write-client");
+const { withRetry } = require("../shared/retry");
 
 /**
  * Returns an authenticated Cosmos DB container handle.
@@ -58,16 +59,17 @@ async function getRecord(cveId) {
     parameters: [{ name: "@cveId", value: cveId }],
   };
 
-  const { resources } = await container.items
-    .query(querySpec)
-    .fetchAll();
+  const { resources } = await withRetry(
+    () => container.items.query(querySpec).fetchAll(),
+    { label: "cosmos-query" }
+  );
 
   return resources.length > 0 ? resources[0] : null;
 }
 
 /**
  * Delete a record by id and partition key (cve_id).
- * Used only in test cleanup — not part of the production path.
+ * @internal Test cleanup only — not part of the production path.
  * @param {string} id - Document id
  * @param {string} cveId - Partition key value
  * @returns {Promise<void>}

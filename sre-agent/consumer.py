@@ -7,6 +7,7 @@ the SRE Agent pipeline, and completes or abandons accordingly.
 import asyncio
 import logging
 import os
+import sys
 import signal
 from typing import Any
 
@@ -14,6 +15,11 @@ from azure.identity.aio import DefaultAzureCredential
 from azure.servicebus.aio import ServiceBusClient
 from azure.servicebus import ServiceBusReceivedMessage
 from dotenv import load_dotenv
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.telemetry import configure_telemetry
+
+configure_telemetry()
 
 from kql_generator import generate_kql
 from kql_validator import validate_kql

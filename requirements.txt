@@ -5,6 +5,7 @@ azure-core
 # Async Network & API Calls
 aiohttp>=3.9.0
 
+
 # Environment Configuration
 python-dotenv>=1.0.0
 
@@ -24,3 +25,9 @@ numpy>=1.26.0
 # Testing (Global)
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+
+#Azure sfk
+
+azure-cosmos>=4.1.0
+azure-data-tables>=13.2.0
+azure-search-documents>=11.4.0

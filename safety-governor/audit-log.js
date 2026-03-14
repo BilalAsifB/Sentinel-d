@@ -11,6 +11,7 @@
 
 const { TableClient } = require("@azure/data-tables");
 const { DefaultAzureCredential } = require("@azure/identity");
+const telemetry = require("../shared/telemetry");
 require("dotenv").config();
 
 const TABLE_NAME = "auditlog";
@@ -112,15 +113,7 @@ async function writeAuditRecord({
   const tableClient = module.exports.getTableClient();
   await tableClient.createEntity(entity);
 
-  console.log(
-    JSON.stringify({
-      message: "Audit record written",
-      partitionKey,
-      rowKey,
-      tier,
-      action,
-    })
-  );
+  telemetry.logInfo("Audit record written", { partitionKey, rowKey, tier, action });
 
   return { partitionKey, rowKey };
 }
