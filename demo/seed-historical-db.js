@@ -16,8 +16,8 @@
  *
  * Env vars (for live mode):
  *   COSMOS_ENDPOINT       — Cosmos DB account endpoint URL
- *   COSMOS_DB_NAME        — Database name (default: "sentinel")
- *   COSMOS_CONTAINER_NAME — Container name (default: "historical_records")
+ *   COSMOS_DB_NAME        — Database name (default: "sentinel-d-db")
+ *   COSMOS_CONTAINER_NAME — Container name (default: "remediation-history")
  */
 
 const path = require("path");
