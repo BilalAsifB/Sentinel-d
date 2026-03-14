@@ -57,7 +57,7 @@ async function seedLive(traces) {
     process.exit(1);
   }
 
-  const connectionString = process.env.APPINSIGHTS_CONNECTION_STRING;
+  const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
   if (!connectionString) {
     console.error("❌ APPINSIGHTS_CONNECTION_STRING not set.");
     process.exit(1);
