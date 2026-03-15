@@ -108,7 +108,15 @@ async def start_consumer() -> None:
                     )
                     try:
                         import json
-                        raw = b"".join(message.body)
+
+                        body = message.body
+                        if isinstance(body, bytes):
+                            raw = body
+                        elif hasattr(body, '__iter__'):
+                            raw = b"".join(body)
+                        else:
+                            raw = str(body).encode("utf-8")
+                        
                         event = json.loads(raw)
 
                         classification = await process_event(event)
