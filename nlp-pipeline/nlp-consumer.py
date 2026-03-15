@@ -251,6 +251,13 @@ async def start_consumer() -> None:
                         # Run the full NLP pipeline
                         structured_context = await pipeline.process(webhook_payload)
 
+                        # Forward replay fields so patch-generator can attempt RAG replay
+                        if structured_context.get("historical_patch_available"):
+                            _hm = getattr(pipeline, "last_historical_match", None)
+                            if _hm:
+                                structured_context.setdefault("historical_patch_diff", _hm.get("historical_patch_diff", ""))
+                                structured_context.setdefault("replay_eligible", _hm.get("replay_eligible", False))
+
                         logger.info(
                             "Pipeline complete for event_id=%s "
                             "(historical=%s, patch_available=%s, intent=%s)",
