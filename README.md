@@ -1,3 +1,5 @@
+![cover image](images/sentinel-d-cover-img.png)
+
 # 🛡️ Sentinel-D: Next-Generation Autonomous Vulnerability Remediation
 
 [![AI Dev Days Hackathon](https://img.shields.io/badge/AI%20Dev%20Days-Finalist-blue?style=for-the-badge)](https://aidevdays.com)
