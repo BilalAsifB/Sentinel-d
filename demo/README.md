@@ -47,6 +47,7 @@ dependencies to trigger GHAS alerts.
 cd demo && npm install
 
 # 2. Seed Application Insights with 48h of synthetic telemetry
+#    ⚠️  Run at least 10 minutes before Path A — App Insights has ingestion lag
 npm run seed-telemetry          # or: node seed-telemetry.js --mock
 
 # 3. Seed Historical DB with Log4Shell record for RAG replay
@@ -56,12 +57,64 @@ npm run seed-historical-db      # or: node seed-historical-db.js --mock
 npm start
 ```
 
+## Pre-Demo Checklist
+
+Before running any demo path, verify:
+
+```bash
+# Validate seed record without writing
+node seed-historical-db.js --mock
+
+# Validate telemetry without writing
+node seed-telemetry.js --mock
+
+# Confirm seed record is in Cosmos DB
+node -e "
+const { CosmosClient } = require('@azure/cosmos');
+const { DefaultAzureCredential } = require('@azure/identity');
+const client = new CosmosClient({ endpoint: process.env.COSMOS_ENDPOINT, aadCredentials: new DefaultAzureCredential() });
+client.database('sentinel-d-db').container('remediation-history')
+  .item('demo-seed-log4shell', 'CVE-2021-44228').read()
+  .then(r => console.log('✅ Seed record present:', r.resource.id))
+  .catch(() => console.error('❌ Seed record missing — run seed-historical-db.js'));
+"
+```
+
+## Reset Between Demo Runs
+
+To reset Path A back to cold-start state (removes the record written by the live pipeline):
+
+```bash
+# Delete the live pipeline record (keeps the seed record intact)
+node -e "
+const { CosmosClient } = require('@azure/cosmos');
+const { DefaultAzureCredential } = require('@azure/identity');
+const client = new CosmosClient({ endpoint: process.env.COSMOS_ENDPOINT, aadCredentials: new DefaultAzureCredential() });
+client.database('sentinel-d-db').container('remediation-history')
+  .items.query({ query: \"SELECT c.id, c.cve_id FROM c WHERE c.cve_id = 'CVE-2021-44228' AND c.id != 'demo-seed-log4shell'\" })
+  .fetchAll()
+  .then(async ({ resources }) => {
+    for (const r of resources) {
+      await client.database('sentinel-d-db').container('remediation-history').item(r.id, r.cve_id).delete();
+      console.log('🗑️  Deleted', r.id);
+    }
+    if (!resources.length) console.log('ℹ️  No live pipeline records found — already clean');
+  });
+"
+```
+
+To clean up the seed record entirely (e.g. after demo):
+
+```bash
+node seed-historical-db.js --cleanup
+```
+
 ## Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `APPINSIGHTS_CONNECTION_STRING` | App Insights for telemetry seeding |
-| `COSMOS_DB_ENDPOINT` | Cosmos DB for Historical DB seeding |
-| `COSMOS_DB_DATABASE` | Database name (default: `sentinel`) |
-| `COSMOS_DB_CONTAINER` | Container name (default: `historical_records`) |
-| `JWT_SECRET` | Demo app JWT secret (default: `demo-secret-do-not-use`) |
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `APPLICATIONINSIGHTS_CONNECTION_STRING` | App Insights for telemetry seeding | *(required)* |
+| `COSMOS_ENDPOINT` | Cosmos DB account endpoint URL | *(required)* |
+| `COSMOS_DB_NAME` | Database name | `sentinel-d-db` |
+| `COSMOS_CONTAINER_NAME` | Container name | `remediation-history` |
+| `JWT_SECRET` | Demo app JWT secret | `demo-secret-do-not-use` |
