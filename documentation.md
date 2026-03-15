@@ -26,6 +26,7 @@
 
 Sentinel-D is structured as a **deterministic, acyclic pipeline** with explicit handoff points. Each component is independently callable, testable, and replaceable.
 ---
+##  Architecture Overview: The Autonomous Pipeline
 
 ![Architecture diagram](flow_chart.png)
 
