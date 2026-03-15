@@ -4,6 +4,7 @@
 [![Azure Stack](https://img.shields.io/badge/Azure-Integrated-0078D4?style=for-the-badge)](https://azure.microsoft.com)
 [![Microsoft Foundry](https://img.shields.io/badge/Microsoft%20Foundry-LLM%20Inference-6B8EFF?style=for-the-badge)](https://learn.microsoft.com/en-us/azure/ai-services/openai/)
 [![GitHub Integration](https://img.shields.io/badge/GitHub%20GHAS-Real%20Alerts-000?style=for-the-badge)](https://github.com/advanced-security)
+[![Documentation.md](https://img.shields.io/badge/Documentation%20.-Real%20md-000?style=for-the-badge)](https://github.com/advanced-security)
 [[Documentation.md](https://github.com/MujtabaJunaid/Sentinel-d/blob/main/documentation.md)]
 
 ## 🎯 The Elevator Pitch
