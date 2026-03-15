@@ -130,41 +130,6 @@ All inter-component communication uses frozen JSON schemas for strict validation
 
 ![architecture diagram](flow_chart.png)
 
-```text
-┌────────────────────────────────────────────────────────────────────┐
-│                    GHAS ALERT (webhook_payload.json)               │
-└────────────────────────────────────────────────────────────────────┘
-                              ↓
-              ┌──────────────────────────────────┐
-              │   Azure Function (Validation)    │
-              │  Schema: AJV validation (13ms)   │
-              └──────────────────────────────────┘
-                              ↓
-              ┌──────────────────────────────────┐
-              │  Service Bus (Guaranteed Delivery)│
-              │  Queue: vulnerability-events     │
-              └──────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────────┐
-│ SRE Agent (Telemetry Classification)                               │
-│ KQL → App Insights → ACTIVE/DORMANT/DEFERRED                      │
-└─────────────────────────────────────────────────────────────────────┘
-         ↓ ACTIVE             ↓ DORMANT/DEFERRED
-    ┌────────────────┐     ┌──────────────────────┐
-    │ Full Pipeline  │     │ Human Decision Gate  │
-    └────────────────┘     │ GitHub Issue + Labels│
-         ↓                 └──────────────────────┘
-    ┌────────────────────────────────────────┐
-    │ 1. Historical DB Lookup (Cosmos DB)   │ → RAG Replay (90 sec)
-    │ 2. NLP Pipeline (spaCy + DistilBERT) │
-    │ 3. Patch Generator (Foundry 4-sect)  │ → Foundry Call (5 min)
-    │ 4. Sandbox Validator (tests + SSIM)  │
-    │ 5. Safety Governor (4-tier routing)  │
-    │ 6. GitHub Integration (PR/Issue)     │
-    │ 7. Historical DB Write (Cosmos DB)   │ → Future Learning
-    └────────────────────────────────────────┘
-```
-
 ---
 
 ## 🏅 Why Sentinel-D Wins Each Hackathon Category
