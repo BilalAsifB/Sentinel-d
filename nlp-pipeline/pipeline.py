@@ -28,13 +28,40 @@ logger = logging.getLogger(__name__)
 
 PIPELINE_VERSION = "3.0.0"
 
+# Markers indicating auth/crypto-sensitive code paths.
+# If file_path or package contains any of these, touches_auth_crypto is True,
+# forcing the Safety Governor to a LOW tier minimum regardless of confidence.
+_AUTH_CRYPTO_MARKERS = [
+    "auth", "oauth", "jwt", "token", "secret", "password", "credential",
+    "crypto", "cipher", "encrypt", "decrypt", "hash", "ssl", "tls", "cert",
+    "saml", "oidc", "hmac", "rsa", "aes", "bcrypt", "pbkdf", "keystore",
+    "signing", "signature", "private_key", "public_key",
+]
+
+
+def _detect_auth_crypto(file_path: str, package: str) -> bool:
+    """Return True if file_path or package touches auth or crypto code.
+
+    Used by the Safety Governor override logic: if True, the tier is forced
+    to LOW minimum regardless of composite confidence score.
+
+    Args:
+        file_path: Path to the affected file from the webhook payload.
+        package: Affected package name.
+
+    Returns:
+        True if auth or crypto markers are found in either argument.
+    """
+    combined = f"{file_path} {package}".lower()
+    return any(marker in combined for marker in _AUTH_CRYPTO_MARKERS)
+
 
 class NLPPipeline:
     """Orchestrates the full NLP context pipeline.
 
     Produces a structured_context.json dictionary with all v3.0 fields
     including historical_match_status, historical_patch_available,
-    solutions_to_avoid, and historical_record_id.
+    solutions_to_avoid, historical_record_id, and touches_auth_crypto.
     """
 
     def __init__(
@@ -72,8 +99,9 @@ class NLPPipeline:
             5. Assemble structured_context
 
         Args:
-            webhook_payload: Dictionary with event_id, cve_id,
-                affected_package, current_version, fix_version_range.
+            webhook_payload: Dictionary with event_id, cve_id, severity,
+                affected_package, current_version, fix_version_range,
+                file_path, line_range, repo, timestamp.
 
         Returns:
             structured_context.json dictionary with all required fields.
@@ -81,18 +109,27 @@ class NLPPipeline:
         event_id: str = webhook_payload.get("event_id", "")
         cve_id: str = webhook_payload.get("cve_id", "")
         affected_package: str = webhook_payload.get("affected_package", "")
+        file_path: str = webhook_payload.get("file_path", "")
 
         logger.info("Processing event %s (CVE %s)", event_id, cve_id)
 
-        # Step 1: Historical DB lookup FIRST
+        # Step 1: Historical DB lookup FIRST (spec mandates before API calls).
+        # Use cve_id + package + fix range as description to improve embedding
+        # quality for Stage 2 semantic similarity — NVD text is not yet available.
+        description_for_lookup = " ".join(filter(None, [
+            cve_id,
+            affected_package,
+            webhook_payload.get("fix_version_range", ""),
+            webhook_payload.get("current_version", ""),
+        ]))
         historical_match = await self.historical_db.lookup(
             event_id=event_id,
             cve_id=cve_id,
-            description=cve_id,
+            description=description_for_lookup,
             affected_package=affected_package,
         )
 
-        # Step 2: NVD + SO fetchers in PARALLEL
+        # Step 2: NVD + SO fetchers in PARALLEL (asyncio.gather required by spec).
         nvd_result, so_result = await asyncio.gather(
             self.nvd_fetcher.fetch(cve_id),
             self.so_fetcher.fetch(affected_package),
@@ -117,7 +154,9 @@ class NLPPipeline:
             self.intent_classifier.classify(so_text)
         )
 
-        # Step 5: Assemble structured_context
+        # Step 5: Assemble structured_context with ALL required fields.
+        # solutions_to_avoid: failed strategies from historical DB, injected into
+        # Patch Generator Section 4 to prevent repeating known-bad approaches.
         solutions_to_avoid = [
             {
                 "strategy": s.get("strategy", ""),
@@ -127,7 +166,22 @@ class NLPPipeline:
         ]
 
         structured_context: Dict[str, Any] = {
+            # ── Identity fields (required by Patch Generator and Safety Governor)
             "event_id": event_id,
+            "cve_id": cve_id,
+            "severity": webhook_payload.get("severity", ""),
+            "affected_package": affected_package,
+            "current_version": webhook_payload.get("current_version", ""),
+            "fix_version_range": webhook_payload.get("fix_version_range", ""),
+            "file_path": file_path,
+            "line_range": webhook_payload.get("line_range", [0, 0]),
+            "repo": webhook_payload.get("repo", ""),
+
+            # ── Safety Governor override flag
+            # If True: forces LOW tier minimum regardless of composite score.
+            "touches_auth_crypto": _detect_auth_crypto(file_path, affected_package),
+
+            # ── NLP output fields
             "fix_strategy": self._determine_fix_strategy(intent_label),
             "breaking_changes": breaking_changes,
             "community_intent_class": intent_label,
@@ -140,6 +194,8 @@ class NLPPipeline:
                 "auth_required": False,
             },
             "migration_steps": migration_steps,
+
+            # ── v3.0 Historical DB fields
             "historical_match_status": historical_match.get(
                 "lookup_status", "NO_MATCH"
             ),
@@ -148,17 +204,21 @@ class NLPPipeline:
             ),
             "historical_record_id": historical_match.get(
                 "matched_record_id", None
-            ),
+            ) or None,
             "solutions_to_avoid": solutions_to_avoid,
+
+            # ── Metadata
             "pipeline_version": PIPELINE_VERSION,
             "timestamp": datetime.utcnow().isoformat(),
         }
 
         logger.info(
-            "Context assembled for %s — historical=%s, intent=%s",
+            "Context assembled for %s — historical=%s, intent=%s, "
+            "touches_auth_crypto=%s",
             event_id,
             structured_context["historical_match_status"],
             intent_label,
+            structured_context["touches_auth_crypto"],
         )
         return structured_context
 
@@ -166,7 +226,7 @@ class NLPPipeline:
         """Close underlying clients."""
         await self.historical_db.close()
 
-    # ── helpers ──────────────────────────────────────────────
+    # ── helpers ──────────────────────────────────────────────────────────────
 
     @staticmethod
     def _extract_nvd_text(nvd_data: Dict[str, Any]) -> str:

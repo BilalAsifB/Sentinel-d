@@ -1,10 +1,15 @@
 """Historical DB read client — two-stage lookup.
 
-Stage 1: Exact CVE match via Cosmos DB partition key lookup.
+Stage 1: Exact CVE match via Cosmos DB partition key lookup (SUCCESS outcome only).
 Stage 2: In-memory cosine similarity on embeddings (numpy, threshold 0.88).
 
 NOTE: Azure AI Search was removed for cost — cosine similarity is computed
 in-memory against all records fetched from Cosmos DB.
+
+Env vars (must match .env exactly):
+    COSMOS_ENDPOINT        — Cosmos DB account endpoint URL
+    COSMOS_DB_NAME         — Database name (default: sentinel-d-db)
+    COSMOS_CONTAINER_NAME  — Container name (default: remediation-history)
 """
 
 import asyncio
@@ -32,7 +37,7 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
         b: Second embedding vector.
 
     Returns:
-        Cosine similarity in [-1, 1].
+        Cosine similarity in [-1, 1]. Returns 0.0 if either vector is zero.
     """
     va = np.array(a, dtype=np.float64)
     vb = np.array(b, dtype=np.float64)
@@ -46,8 +51,13 @@ def cosine_similarity(a: List[float], b: List[float]) -> float:
 class HistoricalDBReadClient:
     """Two-stage historical DB lookup client.
 
-    Stage 1: Exact CVE ID match in Cosmos DB.
+    Stage 1: Exact CVE ID match in Cosmos DB (partition key lookup — O(1)).
     Stage 2: In-memory cosine similarity against all records' embeddings.
+
+    Env var names match the project .env file exactly:
+        COSMOS_ENDPOINT        → account endpoint URL
+        COSMOS_DB_NAME         → database name (default: sentinel-d-db)
+        COSMOS_CONTAINER_NAME  → container name (default: remediation-history)
     """
 
     def __init__(
@@ -62,15 +72,31 @@ class HistoricalDBReadClient:
         Args:
             embedding_service: Service for generating query embeddings.
             cosmos_endpoint: Cosmos DB endpoint (or from env COSMOS_ENDPOINT).
-            database_name: Cosmos DB database name (or from env COSMOS_DB_NAME).
+            database_name: Database name (or from env COSMOS_DB_NAME).
             container_name: Container name (or from env COSMOS_CONTAINER_NAME).
         """
         self.embedding_service = embedding_service or EmbeddingService()
-        self.cosmos_endpoint = cosmos_endpoint or os.environ.get("COSMOS_ENDPOINT", "")
-        self.database_name = database_name or os.environ.get("COSMOS_DB_NAME", "sentinel")
-        self.container_name = container_name or os.environ.get(
-            "COSMOS_CONTAINER_NAME", "cve_patches"
+
+        # Use exact env var names from .env — COSMOS_ENDPOINT, COSMOS_DB_NAME,
+        # COSMOS_CONTAINER_NAME — with correct provisioned defaults as fallback.
+        self.cosmos_endpoint = (
+            cosmos_endpoint
+            or os.environ.get("COSMOS_ENDPOINT", "")
         )
+        self.database_name = (
+            database_name
+            or os.environ.get("COSMOS_DB_NAME", "sentinel-d-db")
+        )
+        self.container_name = (
+            container_name
+            or os.environ.get("COSMOS_CONTAINER_NAME", "remediation-history")
+        )
+
+        if not self.cosmos_endpoint:
+            logger.warning(
+                "COSMOS_ENDPOINT not set — Historical DB lookups will fail"
+            )
+
         self._client: Optional[CosmosClient] = None
         self._credential: Optional[DefaultAzureCredential] = None
 
@@ -78,12 +104,14 @@ class HistoricalDBReadClient:
         """Get Cosmos DB container client, initializing if needed."""
         if self._client is None:
             self._credential = DefaultAzureCredential()
-            self._client = CosmosClient(self.cosmos_endpoint, credential=self._credential)
+            self._client = CosmosClient(
+                self.cosmos_endpoint, credential=self._credential
+            )
         db = self._client.get_database_client(self.database_name)
         return db.get_container_client(self.container_name)
 
     async def close(self) -> None:
-        """Close underlying clients."""
+        """Close underlying Cosmos DB and identity clients."""
         if self._client:
             await self._client.close()
         if self._credential:
@@ -98,10 +126,15 @@ class HistoricalDBReadClient:
     ) -> Dict[str, Any]:
         """Perform two-stage historical lookup.
 
+        Stage 1: Exact CVE ID match (partition key — fast, no RU cost).
+        Stage 2: In-memory cosine similarity if Stage 1 misses.
+
         Args:
             event_id: Unique event identifier.
-            cve_id: CVE identifier.
-            description: CVE description text for embedding.
+            cve_id: CVE identifier (e.g. CVE-2021-44228).
+            description: Text for embedding generation (used in Stage 2).
+                         Should include cve_id + package + fix_version_range
+                         since NVD text is not yet available at this point.
             affected_package: Affected package name.
 
         Returns:
@@ -109,32 +142,49 @@ class HistoricalDBReadClient:
         """
         logger.info("Historical lookup for %s (CVE %s)", event_id, cve_id)
 
-        # Stage 1: Exact match
+        # Stage 1: Exact CVE ID match
         exact = await self._exact_lookup(cve_id)
         if exact:
             logger.info("EXACT_MATCH for %s", cve_id)
             return self._build_response(event_id, cve_id, "EXACT_MATCH", exact)
 
         # Stage 2: In-memory cosine similarity
-        logger.debug("No exact match — computing semantic similarity")
+        logger.debug("No exact match — computing semantic similarity for %s", cve_id)
         try:
-            combined_text = f"{description} {affected_package}"
-            query_embedding = await self.embedding_service.embed_text(combined_text)
-            best_match = await self._semantic_lookup(query_embedding)
-            if best_match:
-                logger.info("SEMANTIC_MATCH for %s (score=%.3f)", cve_id, best_match["score"])
-                return self._build_response(
-                    event_id, cve_id, "SEMANTIC_MATCH", best_match["record"],
-                    match_confidence=best_match["score"],
+            query_embedding = await self.embedding_service.embed_text(description)
+            # Skip similarity if embedding is all zeros (service unavailable)
+            if any(v != 0.0 for v in query_embedding):
+                best_match = await self._semantic_lookup(query_embedding)
+                if best_match:
+                    logger.info(
+                        "SEMANTIC_MATCH for %s (score=%.3f)",
+                        cve_id,
+                        best_match["score"],
+                    )
+                    return self._build_response(
+                        event_id,
+                        cve_id,
+                        "SEMANTIC_MATCH",
+                        best_match["record"],
+                        match_confidence=best_match["score"],
+                    )
+            else:
+                logger.warning(
+                    "Skipping semantic lookup for %s — embedding returned zero vector",
+                    cve_id,
                 )
         except Exception as exc:
-            logger.warning("Semantic search failed: %s", exc)
+            logger.warning("Semantic search failed for %s: %s", cve_id, exc)
 
         logger.info("NO_MATCH for %s", cve_id)
         return self._build_no_match(event_id, cve_id)
 
     async def _exact_lookup(self, cve_id: str) -> Optional[Dict[str, Any]]:
-        """Stage 1: Query Cosmos DB for exact CVE match with SUCCESS outcome."""
+        """Stage 1: Query Cosmos DB for exact CVE match with SUCCESS outcome.
+
+        Uses partition key /cve_id for O(1) lookup.
+        Only returns SUCCESS records — FAILED/PARTIAL records are not replayable.
+        """
         try:
             container = await self._get_container()
             query = (
@@ -151,23 +201,31 @@ class HistoricalDBReadClient:
                 max_item_count=1,
             ):
                 items.append(item)
-                break
+                break  # Only need the first match
             return items[0] if items else None
         except Exception as exc:
-            logger.error("Cosmos DB exact lookup failed: %s", exc)
+            logger.error("Cosmos DB exact lookup failed for %s: %s", cve_id, exc)
             return None
 
     async def _semantic_lookup(
         self, query_embedding: List[float]
     ) -> Optional[Dict[str, Any]]:
-        """Stage 2: In-memory cosine similarity against all records."""
+        """Stage 2: In-memory cosine similarity against all records.
+
+        Fetches all records with embeddings and computes similarity.
+        Returns the best match above SIMILARITY_THRESHOLD (0.88).
+
+        Note: This performs a full scan — acceptable for small containers
+        (< 1000 records). For large containers, replace with vector index.
+        """
         try:
             container = await self._get_container()
             query = (
                 "SELECT c.id, c.cve_id, c.cve_description_embedding, "
                 "c.patch_outcome, c.patch_diff, c.fix_strategy_used, "
                 "c.solutions_tried, c.language, c.framework "
-                "FROM c WHERE ARRAY_LENGTH(c.cve_description_embedding) > 0"
+                "FROM c WHERE ARRAY_LENGTH(c.cve_description_embedding) > 0 "
+                "AND c.patch_outcome = 'SUCCESS'"
             )
             best_score = 0.0
             best_record: Optional[Dict[str, Any]] = None
@@ -176,7 +234,7 @@ class HistoricalDBReadClient:
                 query=query, enable_cross_partition_query=True
             ):
                 embedding = record.get("cve_description_embedding", [])
-                if not embedding:
+                if not embedding or len(embedding) != len(query_embedding):
                     continue
                 score = cosine_similarity(query_embedding, embedding)
                 if score >= SIMILARITY_THRESHOLD and score > best_score:
@@ -199,8 +257,9 @@ class HistoricalDBReadClient:
         record: Dict[str, Any],
         match_confidence: float = 1.0,
     ) -> Dict[str, Any]:
-        """Build historical_match.json response."""
+        """Build historical_match.json conformant response for a hit."""
         all_solutions = record.get("solutions_tried", [])
+        # Only surface FAILED strategies as things to avoid
         failed = [
             {
                 "strategy": s.get("strategy", ""),
@@ -228,7 +287,8 @@ class HistoricalDBReadClient:
             "solutions_tried_previously": failed,
             "replay_eligible": replay_eligible,
             "replay_ineligible_reason": (
-                None if replay_eligible
+                None
+                if replay_eligible
                 else f"Previous outcome: {record.get('patch_outcome')}"
             ),
             "timestamp": datetime.utcnow().isoformat(),
@@ -236,16 +296,16 @@ class HistoricalDBReadClient:
 
     @staticmethod
     def _build_no_match(event_id: str, cve_id: str) -> Dict[str, Any]:
-        """Build NO_MATCH response."""
+        """Build historical_match.json conformant NO_MATCH response."""
         return {
             "event_id": event_id,
             "lookup_status": "NO_MATCH",
             "match_confidence": 0.0,
-            "matched_cve_id": "",
-            "matched_record_id": "",
-            "recommended_strategy": "",
-            "historical_patch_diff": "",
-            "previous_outcome": "",
+            "matched_cve_id": None,
+            "matched_record_id": None,
+            "recommended_strategy": None,
+            "historical_patch_diff": None,
+            "previous_outcome": None,
             "solutions_tried_previously": [],
             "replay_eligible": False,
             "replay_ineligible_reason": "No historical record found",
