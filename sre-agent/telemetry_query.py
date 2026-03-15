@@ -110,7 +110,7 @@ async def query_telemetry(
             return {"call_count": 0, "last_called": None}
 
         row = tables[0].rows[0]
-        columns = [col.name for col in tables[0].columns]
+        columns = [col.name if hasattr(col, "name") else col for col in tables[0].columns]
 
         count_idx = columns.index("call_count") if "call_count" in columns else -1
         last_called_idx = (
