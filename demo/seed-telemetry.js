@@ -80,7 +80,7 @@ async function seedLive(traces) {
     });
   }
 
-  await new Promise((resolve) => client.flush({ callback: resolve }));
+  await client.flush();
   console.log("✅ All traces flushed to App Insights.");
 }
 
