@@ -30,7 +30,7 @@ Sentinel-D is structured as a **deterministic, acyclic pipeline** with explicit 
 
 ##  Architecture Overview: The Autonomous Pipeline
 
-![Architecture diagram](flow_chart.png)
+![Architecture diagram](https://github.com/MujtabaJunaid/Sentinel-d/blob/main/flow_chart_1.png)
 
 ---
 
