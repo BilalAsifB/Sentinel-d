@@ -1,119 +1,134 @@
-"use strict";
+"""App Insights telemetry query execution.
 
-/**
- * seed-telemetry.js — Seed Application Insights with synthetic telemetry.
- *
- * Creates 48 hours of synthetic traces showing ~200 POST /api/log calls
- * per day for the ACTIVE demo repo, and zero telemetry for DORMANT.
- *
- * Usage:
- *   node seed-telemetry.js              (live — writes to App Insights)
- *   node seed-telemetry.js --mock       (dry run — prints what would be sent)
- *
- * Env vars:
- *   APPINSIGHTS_CONNECTION_STRING — App Insights connection string
- */
+Executes validated KQL queries against Azure Application Insights using the
+``azure-monitor-query`` SDK and ``DefaultAzureCredential``.
 
-const MOCK_MODE = process.argv.includes("--mock");
-const HOURS_TO_SEED = 48;
-const REQUESTS_PER_DAY = 200;
+Query strategy:
+    Uses ``query_resource`` with the App Insights resource ID
+    (APP_INSIGHTS_RESOURCE_ID env var) as the primary query method.
+    This is the correct approach for querying Application Insights directly,
+    as opposed to ``query_workspace`` which targets a Log Analytics workspace
+    and may not have the App Insights tables linked.
 
-function generateSyntheticTraces() {
-  const traces = [];
-  const now = Date.now();
-  const totalRequests = Math.floor((REQUESTS_PER_DAY / 24) * HOURS_TO_SEED);
+    Falls back to ``query_workspace`` if APP_INSIGHTS_RESOURCE_ID is not set.
+"""
 
-  for (let i = 0; i < totalRequests; i++) {
-    const hoursAgo = Math.random() * HOURS_TO_SEED;
-    const timestamp = new Date(now - hoursAgo * 60 * 60 * 1000);
-    const duration = Math.floor(Math.random() * 150) + 10; // 10-160ms
-    const success = Math.random() > 0.02; // 98% success rate
+import logging
+import os
+import sys
+from datetime import timedelta
+from typing import Any, Optional
 
-    traces.push({
-      name: "POST /api/log",
-      url: "https://sentinel-d-demo-active.azurewebsites.net/api/log",
-      duration,
-      resultCode: success ? 200 : 500,
-      success,
-      timestamp: timestamp.toISOString(),
-      properties: {
-        "sentinel-d.demo": "true",
-        "sentinel-d.repo": "sentinel-d-demo-active",
-        environment: "production",
-      },
-    });
-  }
+from azure.identity import DefaultAzureCredential
+from azure.monitor.query import LogsQueryClient, LogsQueryStatus
 
-  return traces.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-}
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+from shared.retry import with_retry
 
-async function seedLive(traces) {
-  let appInsights;
-  try {
-    appInsights = require("applicationinsights");
-  } catch {
-    console.error("❌ applicationinsights package not installed.");
-    console.error("   Run: npm install applicationinsights");
-    process.exit(1);
-  }
+logger = logging.getLogger(__name__)
 
-  const connectionString = process.env.APPLICATIONINSIGHTS_CONNECTION_STRING;
-  if (!connectionString) {
-    console.error("❌ APPINSIGHTS_CONNECTION_STRING not set.");
-    process.exit(1);
-  }
+# App Insights resource ID — preferred over workspace ID
+APP_INSIGHTS_RESOURCE_ID: str = os.environ.get("APP_INSIGHTS_RESOURCE_ID", "")
 
-  appInsights.setup(connectionString).setAutoCollectRequests(false).start();
-  const client = appInsights.defaultClient;
 
-  console.log(`📡 Sending ${traces.length} traces to App Insights...`);
+async def query_telemetry(
+    kql_query: str,
+    workspace_id: Optional[str],
+) -> dict[str, Any]:
+    """Execute a KQL query against Azure Application Insights.
 
-  for (const trace of traces) {
-    client.trackRequest({
-      name: trace.name,
-      url: trace.url,
-      duration: trace.duration,
-      resultCode: trace.resultCode,
-      success: trace.success,
-      time: new Date(trace.timestamp),
-      properties: trace.properties,
-    });
-  }
+    Never raises — returns a dict with an ``error`` field on failure so
+    the classifier can still produce a result (defaulting to DORMANT).
 
-  await client.flush();
-  console.log("✅ All traces flushed to App Insights.");
-}
+    Primary: queries via APP_INSIGHTS_RESOURCE_ID using query_resource.
+    Fallback: queries via workspace_id using query_workspace.
 
-async function main() {
-  console.log("═══════════════════════════════════════════════════════");
-  console.log("  Sentinel-D — Telemetry Seeder");
-  console.log(`  Mode: ${MOCK_MODE ? "MOCK (dry run)" : "LIVE"}`);
-  console.log(`  Traces: ~${REQUESTS_PER_DAY * 2} over ${HOURS_TO_SEED} hours`);
-  console.log("═══════════════════════════════════════════════════════\n");
+    Args:
+        kql_query: The validated KQL query to execute.
+        workspace_id: Log Analytics workspace ID (fallback only).
 
-  const traces = generateSyntheticTraces();
+    Returns:
+        Dict with:
+            call_count (int): Number of matching records. 0 on failure.
+            last_called (str | None): ISO timestamp of most recent call.
+            error (str | None): Error message if query failed.
+    """
+    resource_id = APP_INSIGHTS_RESOURCE_ID or os.environ.get(
+        "APP_INSIGHTS_RESOURCE_ID", ""
+    )
 
-  console.log(`📊 Generated ${traces.length} synthetic request traces`);
-  console.log(`   Earliest: ${traces[0].timestamp}`);
-  console.log(`   Latest:   ${traces[traces.length - 1].timestamp}`);
-  console.log(`   Success:  ${traces.filter((t) => t.success).length}`);
-  console.log(`   Failures: ${traces.filter((t) => !t.success).length}\n`);
+    if not resource_id and not workspace_id:
+        return {
+            "call_count": 0,
+            "last_called": None,
+            "error": "Neither APP_INSIGHTS_RESOURCE_ID nor workspace_id configured",
+        }
 
-  if (MOCK_MODE) {
-    console.log("🔍 Sample traces (first 5):\n");
-    for (const trace of traces.slice(0, 5)) {
-      console.log(`  ${trace.timestamp} — ${trace.name} → ${trace.resultCode} (${trace.duration}ms)`);
-    }
-    console.log("\n✅ Mock complete. Run without --mock to send to App Insights.");
-    return;
-  }
+    try:
+        credential = DefaultAzureCredential()
+        client = LogsQueryClient(credential)
 
-  await seedLive(traces);
-}
+        async def _do_query() -> Any:
+            if resource_id:
+                logger.debug(
+                    "Querying App Insights via resource_id: %s",
+                    resource_id,
+                )
+                return client.query_resource(
+                    resource_id=resource_id,
+                    query=kql_query,
+                    timespan=timedelta(days=30),
+                )
+            logger.debug(
+                "Querying App Insights via workspace_id: %s",
+                workspace_id,
+            )
+            return client.query_workspace(
+                workspace_id=workspace_id,
+                query=kql_query,
+                timespan=timedelta(days=30),
+            )
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error("❌ Seeder failed:", err.message);
-    process.exit(1);
-  });
+        result = await with_retry(
+            _do_query,
+            label="app-insights-query",
+            max_attempts=3,
+        )
+
+        if result.status not in (
+            LogsQueryStatus.SUCCESS,
+            LogsQueryStatus.PARTIAL,
+        ):
+            return {
+                "call_count": 0,
+                "last_called": None,
+                "error": f"Query returned status: {result.status}",
+            }
+
+        tables = result.tables
+        if not tables or not tables[0].rows:
+            return {"call_count": 0, "last_called": None}
+
+        row = tables[0].rows[0]
+        columns = [col.name for col in tables[0].columns]
+
+        count_idx = columns.index("call_count") if "call_count" in columns else -1
+        last_called_idx = (
+            columns.index("last_called") if "last_called" in columns else -1
+        )
+
+        call_count = int(row[count_idx]) if count_idx >= 0 else 0
+        last_called: Optional[str] = None
+        if last_called_idx >= 0 and row[last_called_idx]:
+            last_called = row[last_called_idx].isoformat()
+
+        logger.info(
+            "Telemetry query result: call_count=%d, last_called=%s",
+            call_count,
+            last_called,
+        )
+        return {"call_count": call_count, "last_called": last_called}
+
+    except Exception as exc:
+        logger.error("Telemetry query failed: %s", exc, exc_info=True)
+        return {"call_count": 0, "last_called": None, "error": str(exc)}
