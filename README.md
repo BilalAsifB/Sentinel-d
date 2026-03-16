@@ -7,8 +7,7 @@
 [![Microsoft Foundry](https://img.shields.io/badge/Microsoft%20Foundry-LLM%20Inference-6B8EFF?style=for-the-badge)](https://learn.microsoft.com/en-us/azure/ai-services/openai/)
 [![GitHub Integration](https://img.shields.io/badge/GitHub%20GHAS-Real%20Alerts-000?style=for-the-badge)](https://github.com/advanced-security)
 [![Documentation.md](https://img.shields.io/badge/Documentation%20.%20md-000?style=for-the-badge)](https://github.com/MujtabaJunaid/Sentinel-d/blob/main/documentation.md)
-[![Link to Demo](https://img.shields.io/badge/Link%20-%20to-%Demo-000?style=for-the-badge)](https://youtu.be/O1CR-8ffP8s)
-
+[![Link to Demo](https://img.shields.io/badge/Link_to_Demo-FF0000?style=for-the-badge&logo=youtube&logoColor=white)](https://youtu.be/O1CR-8ffP8s)
 ## 🎯 The Elevator Pitch
 
 Sentinel-D transforms passive vulnerability detection into **active, autonomous remediation**. When GitHub Advanced Security detects a vulnerability, Sentinel-D doesn't just alert — it generates a tested, validated patch and opens a pull request in under 5 minutes, *without human intervention*. Powered by a multi-agent architecture that remembers every resolved vulnerability, Sentinel-D gets smarter with every fix, reducing Mean Time to Remediate (MTTR) from **60 days to <5 minutes** and solving DevSecOps alert fatigue.
